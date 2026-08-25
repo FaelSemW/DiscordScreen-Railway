@@ -1,0 +1,69 @@
+{
+  "name": "discord-screen-railway",
+  "version": "1.0.0",
+  "description": "Discord Screen Railway - Private Client",
+  "author": "Fael",
+  "private": true,
+  "type": "module",
+  "main": "desktop/main/index.js",
+  "workspaces": [
+    "client",
+    "server"
+  ],
+  "scripts": {
+    "build": "npm -w client run build",
+    "start": "node server/index.js",
+    "dev": "npm run build && node server/index.js",
+    "desktop": "electron .",
+    "desktop:build": "npm run build && electron-builder --win nsis",
+    "desktop:pack": "npm run build && electron-builder --dir",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "build": {
+    "appId": "com.discordscreen.railway",
+    "productName": "Discord Screen Railway",
+    "electronVersion": "43.4.1",
+    "directories": {
+      "output": "dist/release"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "desktop/ui/assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "Discord Screen Railway",
+      "artifactName": "DiscordScreen-Railway-Setup.${ext}",
+      "uninstallDisplayName": "Discord Screen Railway"
+    },
+    "files": [
+      "desktop/**/*",
+      "server/**/*",
+      "shared/**/*",
+      "client/dist/**/*",
+      "package.json"
+    ]
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "electron": "43.4.1",
+    "electron-builder": "^26.15.3",
+    "jsdom": "^30.0.1",
+    "vitest": "^4.1.11"
+  }
+}

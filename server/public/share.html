@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Transmitir</title>
+    <!-- ?v= existe porque share.js/css têm nome fixo. Quem abriu a página antes
+         dos cabeçalhos no-store guardou a versão antiga por heurística do
+         navegador, e continuaria usando ela para sempre. Trocar a query força
+         uma URL nova. Incremente ao publicar mudanças nesses arquivos. -->
+    <link rel="stylesheet" href="/share.css?v=25" />
+  </head>
+  <body>
+    <main class="card">
+      <header>
+        <h1>Transmitir</h1>
+      </header>
+
+      <!-- Erro que impede a página inteira: token inválido, navegador sem
+           suporte. Os erros de cada fonte ficam no bloco dela. -->
+      <p id="pageStatus" class="status" role="status"></p>
+
+      <div class="fontes">
+        <section class="bloco" id="bloco-tela">
+          <h2>Tela</h2>
+
+          <div class="ajustes">
+            <label class="preset-label">
+              Modo de Qualidade
+              <select id="preset-qualidade">
+                <option value="automatico" selected>Automático (Recomendado)</option>
+                <option value="economia">Economia (720p • 30 FPS • 2.0 Mbps)</option>
+                <option value="equilibrado">Equilibrado (900p • 30 FPS • 4.0 Mbps)</option>
+                <option value="alta">Alta (1080p • 30 FPS • 6.0 Mbps)</option>
+                <option value="maxima">Máxima (1080p • 60 FPS • 8.0 Mbps)</option>
+                <option value="personalizado">Personalizado…</option>
+              </select>
+            </label>
+
+            <div id="personalizado-wrap" class="ajustes-personalizado" hidden>
+              <label>
+                Taxa de Quadros
+                <select id="quadros">
+                  <option value="15">15 fps</option>
+                  <option value="30" selected>30 fps</option>
+                  <option value="45">45 fps</option>
+                  <option value="60">60 fps</option>
+                </select>
+              </label>
+              <label>
+                Taxa de Bits
+                <select id="qualidade">
+                  <option value="1000000">1.0 Mbps</option>
+                  <option value="2000000">2.0 Mbps</option>
+                  <option value="4000000" selected>4.0 Mbps</option>
+                  <option value="6000000">6.0 Mbps</option>
+                  <option value="8000000">8.0 Mbps</option>
+                  <option value="12000000">12.0 Mbps</option>
+                </select>
+              </label>
+              <label>
+                Prioridade
+                <select id="prioridade">
+                  <option value="fluidez" selected>Fluidez (Preservar FPS)</option>
+                  <option value="qualidade">Qualidade (Preservar Resolução)</option>
+                </select>
+              </label>
+            </div>
+          </div>
+
+          <div id="tela-setup">
+            <div class="sem-preview" id="tela-vazio">Sem preview</div>
+            <video id="tela-previa" muted playsinline hidden></video>
+
+            <p class="note" id="tela-nota">
+              Marque "Compartilhar o áudio" na janela do navegador para levar o som.
+            </p>
+
+            <div class="acao">
+              <button id="tela-start" class="primary">Escolher tela e transmitir</button>
+              <button
+                id="tela-escolher"
+                class="primary seta"
+                title="Ver outra tela antes de transmitir"
+                aria-label="Ver outra tela antes de transmitir"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 15l6-6 6 6" /></svg>
+              </button>
+            </div>
+          </div>
+
+          <div id="tela-live" hidden>
+            <div class="live-header">
+              <div class="live-badge"><span class="dot"></span> No ar</div>
+              <div id="tela-health" class="health-badge">Excelente</div>
+            </div>
+            <div id="tela-adaptive-msg" class="adaptive-msg" hidden></div>
+            <video id="tela-preview" muted playsinline></video>
+            <div class="stats">
+              <div><strong id="tela-viewers">0</strong><span>assistindo</span></div>
+              <div><strong id="tela-fps">—</strong><span>quadros</span></div>
+              <div><strong id="tela-bitrate">—</strong><span>enviando</span></div>
+              <div><strong id="tela-elapsed">00:00</strong><span>no ar</span></div>
+            </div>
+            <details class="diag-details">
+              <summary>Diagnóstico da Transmissão</summary>
+              <div class="diag-grid">
+                <div><span>Alvo:</span> <strong id="tela-diag-target">—</strong></div>
+                <div><span>Gargalo (Limiter):</span> <strong id="tela-diag-limiter">—</strong></div>
+                <div><span>Atual (Escada):</span> <strong id="tela-diag-current">—</strong></div>
+                <div><span>Captura (Settings/Real):</span> <strong id="tela-diag-capture">—</strong></div>
+                <div><span>Caminho da Captura:</span> <strong id="tela-diag-capture-path">—</strong></div>
+                <div><span>Ritmo da Captura:</span> <strong id="tela-diag-cap-pacing">—</strong></div>
+                <div><span>Histograma (300q):</span> <strong id="tela-diag-cap-histo">—</strong></div>
+                <div><span>Fila / Codificador:</span> <strong id="tela-diag-encoder">—</strong></div>
+                <div><span>Saída Encoder (Pacing):</span> <strong id="tela-diag-enc-pacing">—</strong></div>
+                <div><span>Keyframes / Deltas:</span> <strong id="tela-diag-keyframes">—</strong></div>
+                <div><span>Taxa Configurada:</span> <strong id="tela-diag-cfg-bitrate">—</strong></div>
+                <div><span>Taxa Codificada:</span> <strong id="tela-diag-enc-bitrate">—</strong></div>
+                <div><span>Taxa Enviada:</span> <strong id="tela-diag-sent-bitrate">—</strong></div>
+                <div><span>Rede / Buffer:</span> <strong id="tela-diag-network">—</strong></div>
+                <div><span>Atraso Envio WS (P95):</span> <strong id="tela-diag-send-delay">—</strong></div>
+              </div>
+            </details>
+            <button id="somAba" class="secondary" hidden>Som de uma aba ou janela</button>
+            <button id="tela-stop" class="danger">Parar de transmitir a tela</button>
+          </div>
+
+          <p id="tela-status" class="status" role="status"></p>
+        </section>
+
+        <section class="bloco" id="bloco-camera">
+          <h2>Câmera</h2>
+
+          <div id="camera-setup">
+            <div class="sem-preview" id="camera-vazio">Sem preview</div>
+            <video id="camera-previa" muted playsinline hidden></video>
+
+            <div class="acao">
+              <button id="camera-start" class="primary">Ligar a câmera</button>
+              <button
+                id="camera-escolher"
+                class="primary seta"
+                title="Escolher a câmera"
+                aria-label="Escolher a câmera"
+                aria-haspopup="menu"
+                aria-expanded="false"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 15l6-6 6 6" /></svg>
+              </button>
+
+              <!-- Preenchido depois da permissão: antes dela o navegador entrega
+                   os dispositivos sem nome, e uma lista de itens em branco não
+                   ajuda ninguém a escolher. -->
+              <ul id="camera-menu" class="menu" role="menu" hidden></ul>
+            </div>
+          </div>
+
+          <div id="camera-live" hidden>
+            <div class="live-badge"><span class="dot"></span> No ar</div>
+            <video id="camera-preview" muted playsinline></video>
+            <div class="stats">
+              <div><strong id="camera-viewers">0</strong><span>assistindo</span></div>
+              <div><strong id="camera-fps">—</strong><span>quadros</span></div>
+              <div><strong id="camera-bitrate">—</strong><span>enviando</span></div>
+              <div><strong id="camera-elapsed">00:00</strong><span>no ar</span></div>
+            </div>
+            <button id="camera-stop" class="danger">Desligar a câmera</button>
+          </div>
+
+          <p id="camera-status" class="status" role="status"></p>
+        </section>
+      </div>
+
+      <footer>
+        <p>Mantenha esta aba aberta enquanto transmite. Você pode voltar para o Discord — a transmissão continua.</p>
+      </footer>
+    </main>
+
+    <script type="module" src="/share.js?v=25"></script>
+  </body>
+</html>

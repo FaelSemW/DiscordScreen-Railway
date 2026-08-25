@@ -1,0 +1,1569 @@
+:root {
+  --bg: #000;
+  --panel: #1e1f22;
+  --tile: #2b2d31;
+  --line: #35373c;
+  --text: #f2f3f5;
+  --muted: #b5bac1;
+  --accent: #5865f2;
+  --danger: #f23f43;
+  --live: #23a55a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Regras de `display` em seletores de ID vencem o [hidden] da folha do
+   navegador. Sem este !important, esconder via JS não funciona. */
+[hidden] {
+  display: none !important;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 "gg sans", "Segoe UI", system-ui, sans-serif;
+  overflow: hidden;
+}
+
+#app {
+  position: relative;
+  width: 100vw;
+  height: 100dvh;
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* -------------------------------------------------------------------- grade */
+
+.grid {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+  height: 100%;
+  display: grid;
+  grid-template-columns: repeat(var(--cols, 1), minmax(0, 1fr));
+  grid-auto-rows: minmax(0, 1fr);
+  gap: 8px;
+  padding: 12px;
+  overflow: hidden;
+}
+
+.tile {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+  background: var(--tile);
+  border-radius: 8px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid transparent;
+  transition: border-color 0.15s;
+}
+
+.tile.sharing {
+  background: #000;
+  cursor: pointer;
+}
+
+/* Palco: a tela escolhida ocupa a área principal de forma responsiva */
+.grid.palco {
+  grid-template-columns: minmax(0, 1fr) 8px var(--strip, 260px);
+  grid-template-rows: minmax(0, 1fr);
+  gap: 0;
+  padding: 0;
+}
+
+.tile-palco {
+  width: 100%;
+  height: 100%;
+  border-radius: 0;
+  background: #000;
+}
+
+/* Tela cheia: remove totalmente barras laterais */
+.grid.palco.cheia {
+  grid-template-columns: minmax(0, 1fr);
+  padding: 0;
+}
+
+.grid.palco.cheia .tile {
+  border-radius: 0;
+}
+
+.sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+  /* Chegar ao fim da barra não pode rolar o que está atrás dela. */
+  overscroll-behavior: contain;
+}
+
+.sidebar-title {
+  margin: 6px 0 0;
+  font: 600 11px/1 inherit;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.sidebar-title:first-child {
+  margin-top: 0;
+}
+
+/* Contagem de pessoas: pílula, não título. Fundo em --tile e não o preto
+   translúcido das outras pílulas — aqui atrás não há vídeo, é o fundo preto da
+   página, e um preto sobre outro não apareceria. */
+.sidebar-count {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 6px 0 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--tile);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: default;
+}
+
+.sidebar-count:first-child {
+  margin-top: 0;
+}
+
+.sidebar-count svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.85;
+}
+
+/* Proporção fixa aqui, ao contrário da grade: a barra tem largura definida e
+   altura livre, então a miniatura precisa de uma altura própria para existir. */
+.sidebar .tile {
+  flex: 0 0 auto;
+  aspect-ratio: 16 / 9;
+}
+
+/* Na miniatura sobra pouco espaço: fica o nome, sai o resto. */
+.sidebar .tile-you,
+.sidebar .tile-watchers,
+.sidebar .watch-who {
+  display: none;
+}
+
+.sidebar .tile-name {
+  padding: 3px 7px;
+  font-size: 11.5px;
+}
+
+.sidebar .watch-prompt {
+  gap: 6px;
+  padding: 8px;
+}
+
+/* Pessoas em quadros, como na call: o mesmo tile da grade, um por linha.
+   Uma coluna só porque o quadro maior mostra a foto no tamanho em que ela
+   ainda serve para reconhecer alguém — que é a razão de o quadro existir. */
+.sidebar-people {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 8px;
+}
+
+.sidebar-people .tile {
+  aspect-ratio: 16 / 9;
+}
+
+/* Avatar proporcional ao quadro: o clamp da grade grande deixaria um disco
+   quase do tamanho do tile aqui. */
+.sidebar-people .avatar {
+  width: 42%;
+  font-size: 13px;
+}
+
+.divider {
+  position: relative;
+  cursor: col-resize;
+  /* Sem isto o toque rola a página em vez de arrastar o divisor. */
+  touch-action: none;
+}
+
+/* A alça só se pinta quando serve para algo: parada, é um vinco discreto. */
+.divider::before {
+  content: '';
+  position: absolute;
+  inset: 6px 4px;
+  border-radius: 999px;
+  background: var(--line);
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.divider:hover::before,
+.divider.dragging::before {
+  opacity: 1;
+  background: var(--accent);
+}
+
+/* `contain` é definido como caber por inteiro: reduz OU amplia preservando a
+   proporção, e por definição nunca corta. A proporção vem do buffer do canvas
+   (canvas.width/height), que o player mantém no tamanho nativo do vídeo.
+
+   Duas alternativas descartadas, pelo registro:
+   - `width/height: auto` + `max-*: 100%` também não corta, mas nunca amplia:
+     uma janela pequena compartilhada ficaria minúscula no meio do tile.
+   - `object-fit: cover` preencheria o tile cortando o excedente.
+
+   As bordas pretas vêm do fundo, que o `contain` deixa exposto. */
+/* position:absolute + inset:0 de propósito: assim a caixa do canvas é
+   exatamente o padding box do tile, sem passar pelo dimensionamento de item de
+   grid. O `place-items: center` do tile alinha itens pelo tamanho do conteúdo,
+   e o `height: 100%` de um item centralizado nem sempre resolve como se espera
+   — era daí que vinha o enquadramento errado.
+
+   Com a caixa definida, `contain` faz o resto: reduz ou amplia preservando a
+   proporção, nunca corta, e deixa o fundo preto aparecer nas sobras. */
+/* O vídeo da conexão direta ocupa exatamente o mesmo lugar do canvas e segue a
+   mesma regra: os dois nunca estão no DOM ao mesmo tempo, e a troca entre um
+   transporte e o outro não pode mudar o enquadramento. */
+.tile canvas,
+.tile video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  background: #000;
+  transition: object-fit 0.15s ease;
+}
+
+#app.fit-contain .tile canvas,
+#app.fit-contain .tile video {
+  object-fit: contain;
+}
+
+#app.fit-cover .tile canvas,
+#app.fit-cover .tile video {
+  object-fit: cover;
+}
+
+#app.fit-original .tile canvas,
+#app.fit-original .tile video {
+  object-fit: none;
+  width: auto;
+  height: auto;
+  max-width: 100%;
+  max-height: 100%;
+  margin: auto;
+}
+
+/* --------------------------------------------------- convite para assistir */
+
+.tile.sharing:has(.watch-prompt) {
+  background: #202225;
+}
+
+.watch-prompt {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 16px;
+  text-align: center;
+}
+
+.watch-who {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+/* Canto inferior direito: livre, já que o nome fica à esquerda e o "você" em
+   cima. Aparece ao passar o mouse para não poluir a grade parada. */
+.tile-stop {
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.tile:hover .tile-stop {
+  opacity: 1;
+}
+
+.tile-stop:hover {
+  background: var(--danger);
+}
+
+.tile-stop svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.2;
+  stroke-linecap: round;
+}
+
+/* ---------------------------------------------- espera do primeiro quadro */
+
+/* Cobre o canvas enquanto ele ainda é preto. pointer-events: none para não
+   engolir o clique de ampliar de quem se cansou de esperar. */
+.tile-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(0, 0, 0, 0.72);
+  color: var(--muted);
+  font-size: 13px;
+  pointer-events: none;
+}
+
+.spinner {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 2.5px solid rgba(255, 255, 255, 0.18);
+  border-top-color: var(--accent);
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ------------------------------------------------------ menu de contexto */
+
+.tile-menu {
+  position: fixed;
+  z-index: 30;
+  min-width: 220px;
+  padding: 5px;
+  border-radius: 8px;
+  background: #111214;
+  border: 1px solid var(--line);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+}
+
+/* O volume fica acima das ações e separado por uma linha: é ajuste contínuo,
+   não um comando, e misturar os dois faz o cursor parecer clicável como item. */
+.menu-volume {
+  padding: 9px 10px 11px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 5px;
+}
+
+.menu-volume-nome {
+  display: block;
+  font: 600 11px/1.3 inherit;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  /* Nome longo não pode empurrar a largura do menu. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.menu-volume-linha {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 9px;
+}
+
+.menu-volume input {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* Largura fixa e dígitos de mesma caixa: sem isso o número dança enquanto se
+   arrasta o cursor, e o cursor dança junto. */
+.menu-volume-valor {
+  min-width: 40px;
+  text-align: right;
+  font: 500 11.5px/1 inherit;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.tile-menu button {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text);
+  font: 500 13px/1.2 inherit;
+  text-align: left;
+}
+
+.tile-menu button:hover {
+  background: var(--danger);
+  color: #fff;
+}
+
+/* ------------------------------------------------------------------ avatar */
+
+.avatar {
+  width: clamp(48px, 22%, 90px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  object-fit: cover;
+  display: grid;
+  place-items: center;
+  font-weight: 600;
+  font-size: clamp(16px, 4vw, 28px);
+  color: #fff;
+  user-select: none;
+}
+
+/* -------------------------------------------------------------------- badge */
+
+/* Nome e plateia lado a lado: posicionar cada um por conta exigiria saber a
+   largura do outro. */
+.tile-footer {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100% - 16px);
+}
+
+/* Rótulo da fonte. Só a câmera leva um: tela é o caso comum, e marcar as duas
+   viraria ruído em cima de cada miniatura. Canto de cima à esquerda, que é o
+   único livre — o nome e a plateia ficam no rodapé, o parar fica à direita. */
+.tile-fonte {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.65);
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 500;
+  /* Não rouba o clique do tile, que alterna destaque e tela cheia. */
+  pointer-events: none;
+}
+
+.sidebar .tile-fonte {
+  top: 5px;
+  left: 5px;
+  padding: 2px 6px;
+  font-size: 10.5px;
+}
+
+.tile-watchers {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  /* Não encolhe: quem cede espaço é o nome, que tem reticências. */
+  flex: 0 0 auto;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.65);
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: default;
+}
+
+.tile-watchers svg {
+  width: 13px;
+  height: 13px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.8;
+}
+
+/* Uma lista suspensa, dois donos: a plateia de uma tela (abre para cima, a
+   partir do rodapé do tile) e as pessoas da sala (abre para baixo, a partir da
+   pílula do topo). Mesma caixa, só muda de que lado ela cresce. */
+.hover-list {
+  position: absolute;
+  left: 0;
+  display: none;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 130px;
+  max-height: 190px;
+  overflow-y: auto;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #111214;
+  border: 1px solid var(--line);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  font-size: 12.5px;
+  font-weight: 400;
+  white-space: nowrap;
+  z-index: 6;
+}
+
+.tile-watchers .hover-list {
+  bottom: calc(100% + 6px);
+}
+
+.pill .hover-list {
+  top: calc(100% + 8px);
+}
+
+.tile-watchers:hover .hover-list,
+.pill:hover .hover-list {
+  display: flex;
+}
+
+.hover-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hover-row .dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--live);
+}
+
+/* A foto na lista: o .avatar da grade é dimensionado em % do quadro, e aqui
+   não há quadro — sem tamanho próprio ele herdaria o mínimo de 48px do clamp e
+   empurraria a linha inteira. */
+.hover-row .avatar {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  font-size: 9px;
+}
+
+.hover-empty {
+  color: var(--muted);
+}
+
+/* min-width:0 é o que permite encolher: sem ele o padrão min-content mantém o
+   nome inteiro, o footer transborda o tile e o overflow:hidden corta a ponta em
+   vez de aplicar reticências. */
+.tile-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 4px 9px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.65);
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tile-name .dot {
+  flex: 0 0 auto;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--live);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.tile-you {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.6);
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+/* ------------------------------------------------------------------- vazio */
+
+.empty {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  padding: 24px;
+  min-height: 0;
+}
+
+.empty .icon {
+  font-size: 42px;
+  margin-bottom: 10px;
+  opacity: 0.8;
+}
+
+.empty h1 {
+  margin: 0 0 6px;
+  font-size: 19px;
+}
+
+.muted {
+  color: var(--muted);
+  font-size: 14px;
+  margin: 0;
+}
+
+/* --------------------------------------------------------------------- HUD */
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+}
+
+/* Sem transmissão no palco as barras ocupam espaço no layout: não há imagem
+   embaixo para obstruir, e nada precisa sumir sob o cursor. Havendo, é o
+   contrário — o porquê está na regra de `#app.flutua`. */
+.topbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 16px 16px 0;
+}
+
+.bottombar {
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px 16px;
+}
+
+/* Com tela no palco as barras saem do layout e flutuam sobre o vídeo: cada
+   faixa reservada é uma tira de imagem a menos, e a imagem é o que se veio ver.
+   Vale fora da tela cheia também — a faixa desperdiçada é a mesma nos dois
+   modos. Paradas elas somem sozinhas, e qualquer movimento do cursor as traz de
+   volta: quem não mexe o mouse não está procurando botão nenhum. */
+#app.flutua .topbar,
+#app.flutua .bottombar {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  transition: opacity 0.25s;
+}
+
+/* Coladas na borda as cápsulas encostam no canto do vídeo e ficam metade
+   dentro, metade fora. O recuo é o mesmo em cima e embaixo: a barra flutua
+   dentro da imagem, não pendurada na quina dela. */
+#app.flutua .topbar {
+  top: 12px;
+}
+
+#app.flutua .bottombar {
+  bottom: 12px;
+}
+
+/* Com a lateral no ar o palco não é a janela inteira, e uma barra centrada na
+   janela aparece visivelmente à direita do vídeo. O recuo é a lateral mais o
+   divisor — as mesmas medidas que a grade usa nas colunas. */
+#app.flutua.palco:not(.cheia) .bottombar {
+  right: calc(var(--strip, 300px) + 10px);
+}
+
+/* Vale sempre que as barras flutuam, com transmissão ou sem: elas cobrem a
+   grade de avatares do mesmo jeito que cobririam o vídeo, e barra que fica é
+   barra que atrapalha. pointer-events junto com a opacidade, porque uma barra
+   invisível continua roubando o clique que era para o que está embaixo. */
+#app.flutua.ocioso .topbar,
+#app.flutua.ocioso .bottombar {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* Sem nada visível dentro, a barra vira uma faixa vazia — é o que sobra no
+   lobby, onde todos os controles da sala saem de cena. */
+.topbar:not(:has(> :not([hidden]))),
+.bottombar:not(:has(.btn:not([hidden]))) {
+  display: none;
+}
+
+.room-pill {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Encostado embaixo, como a barra de controles de uma call. O respiro menor
+   embaixo do que em cima é de propósito: a barra pertence à borda da tela. */
+.pill {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 13px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.65);
+  backdrop-filter: blur(8px);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.pill svg {
+  width: 15px;
+  height: 15px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.75;
+}
+
+/* -------------------------------------------------------------------- dock */
+
+.dock {
+  display: flex;
+  gap: 10px;
+}
+
+/* No dock todo botão é só ícone. O padding lateral do .btn existe para os que
+   têm texto e, aqui, dava 49 de largura para 46 de altura — redondo de longe,
+   ovalado de perto. Largura fixa igual à altura resolve sem mexer nos botões
+   com rótulo, que continuam se ajustando ao texto. */
+.dock .btn {
+  width: 46px;
+  padding: 0;
+}
+
+/* Cápsulas separadas por função, como na call: a ação principal, o que é da
+   sala, e a saída. O agrupamento é o que deixa a barra legível de relance. */
+.group {
+  display: flex;
+  gap: 6px;
+  padding: 5px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(8px);
+}
+
+/* Grupo sem nenhum botão visível vira uma bolha escura solta na tela — é o que
+   sobrava no lobby, onde todos os controles da sala saem de cena. */
+.group:not(:has(> .btn:not([hidden]))) {
+  display: none;
+}
+
+/* position: relative ancora a dica que aparece ao passar o mouse. */
+.btn {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 46px;
+  min-width: 46px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--tile);
+  color: var(--text);
+  font: 500 14px/1 inherit;
+  transition: background 0.15s, color 0.15s;
+}
+
+.btn svg {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.btn:hover:not(:disabled) {
+  background: #43454b;
+}
+
+/* Ação principal disponível */
+.btn.go {
+  background: var(--accent);
+  color: #fff;
+}
+
+.btn.go:hover {
+  background: #4752c4;
+}
+
+/* Você está transmitindo — encerrar */
+.btn.live {
+  background: var(--danger);
+  color: #fff;
+}
+
+.btn.live:hover {
+  background: #c93034;
+}
+
+.btn:disabled {
+  background: transparent;
+  color: var(--muted);
+  cursor: default;
+}
+
+.btn.on {
+  background: #fff;
+  color: #111214;
+}
+
+/* Algo pedido não pôde ser feito e a solução está atrás deste botão. Pulsa em
+   vez de gritar: é um convite a clicar, não um erro. */
+.btn.atencao {
+  background: #f0b232;
+  color: #111214;
+}
+
+.btn.atencao:hover:not(:disabled) {
+  background: #d9a02c;
+}
+
+@keyframes chamar {
+  50% {
+    box-shadow: 0 0 0 5px rgba(240, 178, 50, 0.28);
+  }
+}
+
+.btn.atencao {
+  animation: chamar 1.8s ease-in-out infinite;
+}
+
+/* Sair fica vermelho e por último, como o encerrar chamada do Discord. */
+.btn.leave {
+  background: var(--danger);
+  color: #fff;
+}
+
+.btn.leave:hover {
+  background: #c93034;
+}
+
+/* ------------------------------------------------------------------ painel */
+
+.panel {
+  width: min(300px, calc(100vw - 28px));
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.82);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--line);
+}
+
+.panel-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.panel-row strong {
+  color: var(--text);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.panel-btn {
+  width: 100%;
+  margin-top: 10px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font: 500 12.5px/1 inherit;
+}
+
+.panel-btn:hover {
+  color: var(--text);
+  border-color: var(--muted);
+}
+
+.lobby-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+.user-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  height: 40px;
+  max-width: 220px;
+  padding: 0 14px 0 5px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--tile);
+  color: var(--text);
+  font: 600 13.5px/1 inherit;
+  transition: background 0.15s;
+}
+
+.user-chip:hover {
+  background: #43454b;
+}
+
+/* O avatar do tile usa largura fluida (clamp); aqui ele é fixo. */
+.user-chip .avatar {
+  width: 30px;
+  height: 30px;
+  flex: 0 0 auto;
+  font-size: 12px;
+}
+
+.user-chip span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------------------- lobby */
+
+.lobby {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 28px clamp(16px, 6vw, 60px);
+}
+
+.lobby-head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 22px;
+}
+
+.lobby-head h1 {
+  margin: 0 0 2px;
+  font-size: 22px;
+}
+
+.room-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.room-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: var(--tile);
+  border: 1px solid transparent;
+  text-align: left;
+  color: var(--text);
+  font: inherit;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.room-card:hover {
+  background: #35373d;
+  border-color: var(--accent);
+}
+
+.room-card-top {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.room-card-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: 14.5px;
+}
+
+.room-card svg {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.8;
+}
+
+.room-card-meta {
+  color: var(--muted);
+  font-size: 12.5px;
+}
+
+.room-live {
+  color: var(--live);
+}
+
+.lobby-empty {
+  grid-column: 1 / -1;
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.field-gap {
+  margin-top: 14px;
+}
+
+.opt {
+  font-style: normal;
+  opacity: 0.7;
+}
+
+.modal-error {
+  margin: 10px 0 0;
+  color: #ffb3b6;
+  font-size: 13px;
+}
+
+/* ------------------------------------------------------------------ perfil */
+
+/* O avatar preenche o botão inteiro, para o disco colorido ficar do mesmo
+   tamanho dos círculos escuros dos outros botões do dock. O `.avatar` do tile
+   usa largura fluida (clamp), que aqui precisa ser anulada. */
+.profile-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 20px;
+}
+
+.profile-head .avatar {
+  width: 52px;
+  font-size: 19px;
+}
+
+.profile-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.profile-meta strong {
+  font-size: 15px;
+}
+
+.profile-meta .muted {
+  font-size: 12px;
+  word-break: break-all;
+}
+
+.field-col {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13.5px;
+  color: var(--muted);
+}
+
+.field-col input {
+  padding: 9px 11px;
+  background: #111214;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font: inherit;
+}
+
+.field-col input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* ------------------------------------------------------------------- modal */
+
+.modal {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.7);
+  backdrop-filter: blur(3px);
+  z-index: 20;
+}
+
+.modal-card {
+  width: min(400px, 100%);
+  max-height: 100%;
+  overflow-y: auto;
+  padding: 22px;
+  border-radius: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.6);
+}
+
+.modal-card h2 {
+  margin: 0 0 6px;
+  font-size: 19px;
+}
+
+.modal-sub {
+  margin: 0 0 20px;
+  color: var(--muted);
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  font-size: 13.5px;
+  color: var(--muted);
+}
+
+.field select {
+  flex: 1;
+  max-width: 210px;
+  padding: 8px 10px;
+  background: #111214;
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  font: inherit;
+}
+
+.modal-note {
+  margin: 16px 0 0;
+  padding: 10px 12px;
+  border-radius: 7px;
+  background: #111214;
+  color: var(--muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 18px;
+}
+
+/* ------------------------------------------------------------------ volume */
+
+/* O cursor aparece ao pousar sobre o alto-falante. Um clique ainda silencia —
+   quem só quer cortar o som não deveria ter que mirar num cursor. */
+.volume {
+  position: relative;
+  display: flex;
+}
+
+.volume-pop {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #111214;
+  border: 1px solid var(--line);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+  z-index: 40;
+}
+
+/* Ponte invisível sobre o vão até o botão: sem ela, mover o mouse do botão
+   para o cursor atravessa um pedaço sem hover e a caixa fecha na cara. */
+.volume-pop::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 100%;
+  height: 12px;
+}
+
+.volume:hover .volume-pop,
+.volume:focus-within .volume-pop {
+  display: flex;
+}
+
+.volume-val {
+  font: 600 11.5px/1 inherit;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.volume-pop input {
+  width: 108px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* -------------------------------------------------------------------- dica */
+
+/* Botão que é só ícone precisa dizer o que faz. O `title` do navegador demora
+   quase um segundo, sai com a cara do sistema operacional e não aparece para
+   quem chega pelo teclado — esta versão resolve os três. */
+[data-tip]::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 6px 10px;
+  border-radius: 6px;
+  background: #111214;
+  border: 1px solid var(--line);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55);
+  color: var(--text);
+  font: 500 12.5px/1.2 inherit;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s;
+  z-index: 40;
+}
+
+[data-tip]:hover::after,
+[data-tip]:focus-visible::after {
+  opacity: 1;
+}
+
+/* ------------------------------------------------------ painel apertado */
+
+/* A atividade do Discord abre num painel que pode ficar bem estreito ou baixo.
+   Nesse tamanho não cabe dividir: a lateral sai inteira e fica só a tela, que é
+   o que a pessoa foi ver. Os botões perdem o rótulo e ficam só com o ícone —
+   texto ali roubaria a largura da própria tela. */
+@media (max-width: 620px), (max-height: 460px) {
+  .grid,
+  .grid.palco {
+    padding: 8px;
+    gap: 6px;
+  }
+
+  .grid.palco {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .grid.palco .divider,
+  .grid.palco .sidebar {
+    display: none;
+  }
+
+  .topbar {
+    padding: 8px 8px 0;
+  }
+
+  .bottombar {
+    padding: 0 8px 8px;
+    gap: 6px;
+  }
+
+  .dock {
+    gap: 6px;
+  }
+
+  .group {
+    padding: 4px;
+    gap: 4px;
+  }
+
+  .btn {
+    height: 38px;
+    min-width: 38px;
+    padding: 0 10px;
+  }
+
+  .btn svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  .tile-watchers,
+  .tile-you {
+    display: none;
+  }
+}
+
+/* ----------------------------------------------------------- acessibilidade */
+
+/* Quem navega por teclado precisa ver onde está. :focus-visible mantém o anel
+   longe de quem clica com o mouse. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* Movimento é enfeite aqui — o ponto verde pulsante, o giro da espera, as
+   transições. Para quem pede menos animação, o estado continua legível parado. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ------------------------------------------------------------------- toast */
+
+.toast {
+  position: fixed;
+  left: 50%;
+  bottom: 88px;
+  transform: translateX(-50%);
+  max-width: min(440px, calc(100vw - 32px));
+  padding: 11px 16px;
+  border-radius: 8px;
+  background: #111214;
+  border: 1px solid var(--line);
+  font-size: 13.5px;
+  line-height: 1.45;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  z-index: 10;
+}
+
+.toast.error {
+  border-color: var(--danger);
+  color: #ffb3b6;
+}
+
+/* ------------------------------------------- controles de enquadramento (fit) */
+
+.fit-controls {
+  display: inline-flex;
+  align-items: center;
+  background: rgba(0, 0, 0, 0.45);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.fit-controls .btn-sm {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 11.5px;
+  font-weight: 600;
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.fit-controls .btn-sm.active,
+.fit-controls .btn-sm:hover {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* ---------------------------------------------------- seletor de latência */
+
+.latency-picker {
+  display: inline-flex;
+  align-items: center;
+}
+
+.latency-select {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--text);
+  font-size: 11.5px;
+  font-weight: 500;
+  padding: 5px 8px;
+  border-radius: 6px;
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.latency-select:hover,
+.latency-select:focus {
+  border-color: var(--accent);
+}
+
+/* -------------------------------------------- auto-hide de controles por ócio */
+
+#app.palco.idle-hidden .topbar,
+#app.palco.idle-hidden .bottombar,
+#app.palco.idle-hidden .tile-footer,
+#app.palco.idle-hidden .tile-stop,
+#app.palco.idle-hidden .tile-watchers {
+  opacity: 0 !important;
+  pointer-events: none !important;
+  transition: opacity 0.4s ease;
+}
+
+.topbar,
+.bottombar,
+.tile-footer,
+.tile-stop,
+.tile-watchers {
+  transition: opacity 0.2s ease;
+}
+
+/* ---------------------------------------------------- debug overlay HUD */
+
+.debug-overlay {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 100;
+  background: rgba(10, 12, 16, 0.92);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  backdrop-filter: blur(8px);
+  border-radius: 8px;
+  padding: 12px 14px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 11px;
+  color: #e0e6ed;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
+  min-width: 280px;
+  max-width: 340px;
+  pointer-events: auto;
+}
+
+.debug-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  padding-bottom: 6px;
+  margin-bottom: 8px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  color: #5865f2;
+}
+
+.debug-close {
+  background: transparent;
+  border: none;
+  color: var(--muted);
+  font-size: 16px;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+.debug-close:hover {
+  color: #fff;
+}
+
+.debug-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.debug-section {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.08);
+  padding-bottom: 6px;
+}
+
+.debug-section:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.debug-title {
+  font-size: 9.5px;
+  text-transform: uppercase;
+  color: #8a96a3;
+  letter-spacing: 0.5px;
+  font-weight: 600;
+}
+
+.debug-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.debug-item span {
+  color: #a0aab6;
+}
+
+.debug-item b {
+  color: #57f287;
+  font-weight: 600;
+}

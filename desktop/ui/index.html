@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Discord Screen Railway</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-logo">📺</div>
+        <div>
+          <h1>Discord Screen Railway</h1>
+        </div>
+        <span class="brand-badge" id="app-version">v1.0.0 (Build 2026.08.22.2)</span>
+      </div>
+      <div class="header-actions">
+        <button id="btn-header-home" class="btn btn-sm btn-outline">🏠 Início</button>
+        <button id="btn-header-wizard" class="btn btn-sm btn-outline">🪄 Assistente</button>
+        <button id="btn-header-logs" class="btn btn-sm btn-outline">📋 Logs</button>
+      </div>
+    </header>
+
+    <!-- Main Content Area -->
+    <main class="main-content">
+      
+      <!-- ==================== VIEW: DASHBOARD ==================== -->
+      <section id="view-dashboard" class="dashboard-container">
+        <!-- Status Grid -->
+        <div class="status-grid">
+          <div class="status-card">
+            <div class="title">Servidor Railway</div>
+            <div class="value" id="status-server-url">zaprecovery.online</div>
+            <div class="status-badge connected" id="badge-server-status">
+              <span class="status-dot"></span>
+              <span id="text-server-status">Conectado</span>
+            </div>
+          </div>
+
+          <div class="status-card">
+            <div class="title">Aplicação Discord</div>
+            <div class="value" id="status-client-id">Configurada</div>
+            <div class="status-badge connected" id="badge-discord-status">
+              <span class="status-dot"></span>
+              <span id="text-discord-status">Pronta</span>
+            </div>
+          </div>
+
+          <div class="status-card">
+            <div class="title">Transmissão</div>
+            <div class="value" id="status-stream">Disponível</div>
+            <div class="status-badge connected" id="badge-stream-status">
+              <span class="status-dot"></span>
+              <span id="text-stream-status">Pronta</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Hero Action Card -->
+        <div class="action-hero">
+          <h2>Compartilhar Tela com Áudio no Discord</h2>
+          <p>Sua infraestrutura central no Railway está online. Clique abaixo para iniciar a transmissão ou abrir a chamada no Discord.</p>
+          
+          <div style="display: flex; gap: 14px; margin-bottom: 8px;">
+            <button class="btn btn-primary btn-lg" id="btn-start-transmission">
+              📺 Iniciar Transmissão
+            </button>
+            <button class="btn btn-outline btn-lg" id="btn-open-discord">
+              💬 Abrir Discord
+            </button>
+          </div>
+        </div>
+
+        <!-- Quick Actions & Reset -->
+        <div class="card">
+          <h3 style="font-size: 15px; margin-bottom: 14px;">Gerenciamento da Aplicação</h3>
+          <div class="quick-actions" style="justify-content: flex-start;">
+            <button class="btn btn-outline" id="btn-change-app">
+              🔄 Alterar Aplicação do Discord
+            </button>
+            <button class="btn btn-outline" id="btn-copy-target">
+              📋 Copiar Domínio (zaprecovery.online)
+            </button>
+            <button class="btn btn-danger" id="btn-reset-config">
+              ⚠️ Redefinir Configurações
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== VIEW: WIZARD ==================== -->
+      <section id="view-wizard" class="wizard-container hidden">
+        <div class="card">
+          <!-- Step 1: Welcome -->
+          <div class="wizard-step" id="wizard-step-1">
+            <h2 style="font-size: 20px; margin-bottom: 10px;">Bem-vindo ao Discord Screen Railway!</h2>
+            <p style="color: var(--text-muted); font-size: 14px; margin-bottom: 20px;">
+              Esta versão utiliza a infraestrutura central hospedada no Railway com o domínio permanente <strong>zaprecovery.online</strong>.
+              Suas credenciais do Discord serão salvas de forma 100% segura no seu próprio computador e nunca serão enviadas ao servidor.
+            </p>
+            <div style="display: flex; justify-content: flex-end;">
+              <button class="btn btn-primary btn-lg" id="btn-wizard-step1-next">Continuar ➔</button>
+            </div>
+          </div>
+
+          <!-- Step 2: Credentials -->
+          <div class="wizard-step hidden" id="wizard-step-2">
+            <h2 style="font-size: 20px; margin-bottom: 10px;">Credenciais da Aplicação Discord</h2>
+            <p style="color: var(--text-muted); font-size: 14px; margin-bottom: 20px;">
+              Insira o <strong>Client ID</strong> e o <strong>Client Secret</strong> da sua aplicação no Discord Developer Portal.
+            </p>
+
+            <div class="form-group">
+              <label for="input-client-id">Client ID do Discord</label>
+              <input type="text" id="input-client-id" placeholder="Ex: 123456789012345678" />
+              <div class="hint">Encontrado na aba "OAuth2" ou "General Information" no Discord Developer Portal.</div>
+            </div>
+
+            <div class="form-group">
+              <label for="input-client-secret">Client Secret do Discord</label>
+              <input type="password" id="input-client-secret" placeholder="••••••••••••••••••••••••••••••••" />
+              <div class="hint">Armazenado exclusivamente no Windows DPAPI local. Nunca é enviado ao Railway.</div>
+            </div>
+
+            <div id="credentials-error" class="alert alert-danger hidden"></div>
+
+            <div style="display: flex; justify-content: space-between; margin-top: 20px;">
+              <button class="btn btn-outline" id="btn-wizard-step2-back">⬅ Voltar</button>
+              <button class="btn btn-primary" id="btn-wizard-step2-next">Avançar ➔</button>
+            </div>
+          </div>
+
+          <!-- Step 3: Discord Developer Portal Setup -->
+          <div class="wizard-step hidden" id="wizard-step-3">
+            <h2 style="font-size: 20px; margin-bottom: 10px;">Configuração no Discord Developer Portal</h2>
+            <p style="color: var(--text-muted); font-size: 14px; margin-bottom: 16px;">
+              Acesse a sua aplicação no Discord Developer Portal e configure os seguintes endereços permanentes:
+            </p>
+
+            <div class="portal-box">
+              <div style="font-size: 13px; font-weight: 700; color: #fff;">1. URL Mapping (Aba: Activities ➔ URL Mappings)</div>
+              <div class="portal-field">
+                <span>Target: <code>zaprecovery.online</code></span>
+                <button class="btn btn-sm btn-outline" id="btn-copy-portal-target">Copiar</button>
+              </div>
+
+              <div style="font-size: 13px; font-weight: 700; color: #fff; margin-top: 14px;">2. Redirect URI (Aba: OAuth2 ➔ General)</div>
+              <div class="portal-field">
+                <span>Redirect: <code>https://zaprecovery.online/auth/callback</code></span>
+                <button class="btn btn-sm btn-outline" id="btn-copy-portal-redirect">Copiar</button>
+              </div>
+            </div>
+
+            <label class="checkbox-label">
+              <input type="checkbox" id="check-portal-confirmed" />
+              <span>Já configurei e salvei essas configurações no Discord Developer Portal</span>
+            </label>
+
+            <div style="display: flex; justify-content: space-between; margin-top: 24px;">
+              <button class="btn btn-outline" id="btn-wizard-step3-back">⬅ Voltar</button>
+              <button class="btn btn-primary" id="btn-wizard-step3-finish" disabled>Concluir e Conectar ➔</button>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== VIEW: LOGS ==================== -->
+      <section id="view-logs" class="logs-container hidden">
+        <div class="card">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+            <h2 style="font-size: 16px;">Logs da Aplicação</h2>
+            <button class="btn btn-sm btn-outline" id="btn-copy-logs">📋 Copiar Logs</button>
+          </div>
+          <div class="logs-box" id="logs-content">Carregando logs...</div>
+        </div>
+      </section>
+
+    </main>
+  </div>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

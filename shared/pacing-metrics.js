@@ -1,0 +1,290 @@
+/**
+ * High-Resolution Frame Pacing & Interval Statistics Engine.
+ *
+ * Lightweight, zero-dependency metrics collector for measuring:
+ * - Capture cadence & jitter
+ * - Encoder input/output intervals
+ * - Encode durations & queue sizes
+ * - Network receive intervals
+ * - Viewer presentation intervals & stutter events (>33ms, >50ms, >75ms)
+ */
+
+export function createIntervalTracker(windowSize = 120) {
+  const intervals = new Float64Array(windowSize);
+  let index = 0;
+  let count = 0;
+  let lastTimestamp = null;
+  let lastInterval = 0;
+
+  let late25Count = 0;
+  let late33Count = 0;
+  let late50Count = 0;
+
+  function sample(timestampMs = performance.now()) {
+    if (lastTimestamp !== null) {
+      const delta = Math.max(0, timestampMs - lastTimestamp);
+      intervals[index] = delta;
+      index = (index + 1) % windowSize;
+      if (count < windowSize) count++;
+      lastInterval = delta;
+
+      if (delta > 25) late25Count++;
+      if (delta > 33) late33Count++;
+      if (delta > 50) late50Count++;
+    }
+    lastTimestamp = timestampMs;
+    return lastInterval;
+  }
+
+  function sampleInterval(deltaMs) {
+    if (deltaMs >= 0) {
+      intervals[index] = deltaMs;
+      index = (index + 1) % windowSize;
+      if (count < windowSize) count++;
+      lastInterval = deltaMs;
+
+      if (deltaMs > 25) late25Count++;
+      if (deltaMs > 33) late33Count++;
+      if (deltaMs > 50) late50Count++;
+    }
+    return lastInterval;
+  }
+
+  function getStats() {
+    if (count === 0) {
+      return {
+        avg: 0,
+        p50: 0,
+        p95: 0,
+        p99: 0,
+        max: 0,
+        min: 0,
+        jitter: 0,
+        last: 0,
+        count: 0,
+        late25: 0,
+        late33: 0,
+        late50: 0,
+        histogram: { lt12: 0, b12_20: 0, b20_28: 0, b28_38: 0, b38_50: 0, gt50: 0 },
+      };
+    }
+
+    const currentSamples = new Float64Array(count);
+    let sum = 0;
+    let min = Infinity;
+    let max = -Infinity;
+    let jitterSum = 0;
+
+    let lt12 = 0;
+    let b12_20 = 0;
+    let b20_28 = 0;
+    let b28_38 = 0;
+    let b38_50 = 0;
+    let gt50 = 0;
+
+    for (let i = 0; i < count; i++) {
+      const val = intervals[i];
+      currentSamples[i] = val;
+      sum += val;
+      if (val < min) min = val;
+      if (val > max) max = val;
+      if (i > 0) jitterSum += Math.abs(val - intervals[i - 1]);
+
+      if (val < 12) lt12++;
+      else if (val <= 20) b12_20++;
+      else if (val <= 28) b20_28++;
+      else if (val <= 38) b28_38++;
+      else if (val <= 50) b38_50++;
+      else gt50++;
+    }
+
+    currentSamples.sort();
+
+    const avg = sum / count;
+    const p50 = currentSamples[Math.floor(count * 0.5)];
+    const p95 = currentSamples[Math.min(count - 1, Math.floor(count * 0.95))];
+    const p99 = currentSamples[Math.min(count - 1, Math.floor(count * 0.99))];
+    const jitter = count > 1 ? jitterSum / (count - 1) : 0;
+
+    return {
+      avg: Math.round(avg * 100) / 100,
+      p50: Math.round(p50 * 100) / 100,
+      p95: Math.round(p95 * 100) / 100,
+      p99: Math.round(p99 * 100) / 100,
+      max: Math.round(max * 100) / 100,
+      min: Math.round((min === Infinity ? 0 : min) * 100) / 100,
+      jitter: Math.round(jitter * 100) / 100,
+      last: Math.round(lastInterval * 100) / 100,
+      count,
+      late25: late25Count,
+      late33: late33Count,
+      late50: late50Count,
+      histogram: { lt12, b12_20, b20_28, b28_38, b38_50, gt50 },
+    };
+  }
+
+  function resetWindowCounts() {
+    late25Count = 0;
+    late33Count = 0;
+    late50Count = 0;
+  }
+
+  function reset() {
+    index = 0;
+    count = 0;
+    lastTimestamp = null;
+    lastInterval = 0;
+    resetWindowCounts();
+  }
+
+  return {
+    sample,
+    sampleInterval,
+    getStats,
+    resetWindowCounts,
+    reset,
+  };
+}
+
+export function createValueTracker(windowSize = 120) {
+  const values = new Float64Array(windowSize);
+  let index = 0;
+  let count = 0;
+  let lastValue = 0;
+
+  function sample(val) {
+    values[index] = val;
+    index = (index + 1) % windowSize;
+    if (count < windowSize) count++;
+    lastValue = val;
+    return val;
+  }
+
+  function getStats() {
+    if (count === 0) {
+      return { avg: 0, p50: 0, p95: 0, max: 0, min: 0, last: 0, count: 0 };
+    }
+
+    const current = new Float64Array(count);
+    let sum = 0;
+    let min = Infinity;
+    let max = -Infinity;
+
+    for (let i = 0; i < count; i++) {
+      const v = values[i];
+      current[i] = v;
+      sum += v;
+      if (v < min) min = v;
+      if (v > max) max = v;
+    }
+
+    current.sort();
+
+    return {
+      avg: Math.round((sum / count) * 100) / 100,
+      p50: Math.round(current[Math.floor(count * 0.5)] * 100) / 100,
+      p95: Math.round(current[Math.min(count - 1, Math.floor(count * 0.95))] * 100) / 100,
+      max: Math.round(max * 100) / 100,
+      min: Math.round((min === Infinity ? 0 : min) * 100) / 100,
+      last: lastValue,
+      count,
+    };
+  }
+
+  function reset() {
+    index = 0;
+    count = 0;
+    lastValue = 0;
+  }
+
+  return {
+    sample,
+    getStats,
+    reset,
+  };
+}
+
+export function createStutterDetector({
+  candidateThresholdMs = 40,
+  severeThresholdMs = 75,
+  maxHistory = 10,
+} = {}) {
+  const history = [];
+  let totalCandidateStutters = 0;
+  let totalSevereStutters = 0;
+  let windowCandidateStutters = 0;
+  let windowSevereStutters = 0;
+
+  function record({
+    renderGapMs,
+    captureGapMs = null,
+    encodeDurationMs = null,
+    isKeyframe = false,
+    networkLagMs = null,
+    receiveGapMs = null,
+    decodeQueueSize = 0,
+    presentationQueueSize = 0,
+  }) {
+    const isCandidate = renderGapMs >= candidateThresholdMs;
+    const isSevere = renderGapMs >= severeThresholdMs;
+
+    if (isCandidate) {
+      totalCandidateStutters++;
+      windowCandidateStutters++;
+    }
+    if (isSevere) {
+      totalSevereStutters++;
+      windowSevereStutters++;
+    }
+
+    if (isCandidate) {
+      const snapshot = {
+        timestamp: Date.now(),
+        renderGapMs: Math.round(renderGapMs * 10) / 10,
+        captureGapMs: captureGapMs !== null ? Math.round(captureGapMs * 10) / 10 : null,
+        encodeDurationMs: encodeDurationMs !== null ? Math.round(encodeDurationMs * 10) / 10 : null,
+        isKeyframe,
+        networkLagMs: networkLagMs !== null ? Math.round(networkLagMs) : null,
+        receiveGapMs: receiveGapMs !== null ? Math.round(receiveGapMs * 10) / 10 : null,
+        decodeQueueSize,
+        presentationQueueSize,
+        severity: isSevere ? 'severe' : 'candidate',
+      };
+
+      history.unshift(snapshot);
+      if (history.length > maxHistory) history.pop();
+      return snapshot;
+    }
+    return null;
+  }
+
+  function getStats() {
+    return {
+      totalCandidateStutters,
+      totalSevereStutters,
+      windowCandidateStutters,
+      windowSevereStutters,
+      latestSnapshot: history[0] ?? null,
+      history: [...history],
+    };
+  }
+
+  function resetWindow() {
+    windowCandidateStutters = 0;
+    windowSevereStutters = 0;
+  }
+
+  function reset() {
+    history.length = 0;
+    totalCandidateStutters = 0;
+    totalSevereStutters = 0;
+    resetWindow();
+  }
+
+  return {
+    record,
+    getStats,
+    resetWindow,
+    reset,
+  };
+}
