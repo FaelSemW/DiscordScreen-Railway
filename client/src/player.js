@@ -1,4 +1,8 @@
-import { createIntervalTracker, createStutterDetector } from '../../shared/pacing-metrics.js';
+import {
+  createIntervalTracker,
+  createValueTracker,
+  createStutterDetector,
+} from '../../shared/pacing-metrics.js';
 import {
   getLatencyConfig,
   DEFAULT_LATENCY_MODE,
@@ -21,27 +25,44 @@ export function createPlayer(
   let currentLatencyMode = latencyMode;
   let latencyConfig = getLatencyConfig(latencyMode);
 
-  // Métricas para observabilidade e Ritmo de Quadros (Frame Pacing)
+  // Rastreadores de Intervalos em Alta Resolução (Pacing & Cadência)
   const receiveIntervalTracker = createIntervalTracker(120);
+  const decodeIntervalTracker = createIntervalTracker(120);
   const renderIntervalTracker = createIntervalTracker(120);
+  const rafIntervalTracker = createIntervalTracker(120);
+  const canvasDrawTracker = createValueTracker(120);
+
   const stutterDetector = createStutterDetector({
-    candidateThresholdMs: 40,
-    severeThresholdMs: 75,
-    maxHistory: 10,
+    candidateThresholdMs: 35,
+    severeThresholdMs: 70,
+    maxHistory: 25,
   });
 
   let lastRenderTime = null;
+  let lastDecodeTime = null;
+  let lastRafTime = null;
   let lastReceiveTimestampUs = null;
   let lastCaptureGapMs = 16.67;
   let lastReceiveGapMs = 16.67;
+  let lastDecodeGapMs = 16.67;
+  let lastRafGapMs = 16.67;
+  let lastCanvasDrawDurationMs = 0.5;
   let lastChunkWasKeyframe = false;
 
   let framesReceived = 0;
   let framesDecoded = 0;
   let framesRendered = 0;
   let framesDropped = 0;
+  let framesClosed = 0;
+  let maxLiveFrames = 0;
   let droppedLateCount = 0;
   let droppedRecoveryCount = 0;
+  let chunksSubmitted = 0;
+  let decoderReconfigureCount = 0;
+  let decoderErrors = 0;
+  let hardResyncCount = 0;
+  let softCorrectionCount = 0;
+
   let lastAvDriftMs = 0;
   let lastPresentationLagMs = 0;
   let lastKeyframeAt = 0;
@@ -50,9 +71,50 @@ export function createPlayer(
   let receiveFps = 0;
   let renderFps = 0;
   let decodeFps = 0;
+  let rafFps = 0;
+  let chunksSubmittedSec = 0;
+
   let recCount = 0;
   let decCount = 0;
   let renCount = 0;
+  let rafCount = 0;
+  let chunkCount = 0;
+
+  // Observador de Tarefas Longas (Main Thread Long Tasks)
+  const longTaskEntries = [];
+  let longTaskObserver = null;
+  if (typeof globalThis.PerformanceObserver !== 'undefined') {
+    try {
+      longTaskObserver = new PerformanceObserver((list) => {
+        const now = performance.now();
+        for (const entry of list.getEntries()) {
+          longTaskEntries.push({ duration: entry.duration, at: now });
+        }
+      });
+      longTaskObserver.observe({ entryTypes: ['longtask'] });
+    } catch {
+      // PerformanceObserver não suportado no contexto
+    }
+  }
+
+  function getLongTaskStats() {
+    const now = performance.now();
+    // Janela deslizante de 10 segundos
+    while (longTaskEntries.length && now - longTaskEntries[0].at > 10000) {
+      longTaskEntries.shift();
+    }
+    let longest = 0;
+    let total = 0;
+    for (const item of longTaskEntries) {
+      if (item.duration > longest) longest = item.duration;
+      total += item.duration;
+    }
+    return {
+      count10s: longTaskEntries.length,
+      longestMs: Math.round(longest * 10) / 10,
+      totalDurationMs: Math.round(total * 10) / 10,
+    };
+  }
 
   // Jitter / Playback Buffer State Machine
   // Estados: 'BUILDING' | 'STABLE' | 'LOW' | 'RECOVERING'
@@ -77,7 +139,6 @@ export function createPlayer(
     currentLatencyMode = mode;
     latencyConfig = getLatencyConfig(mode);
     currentTargetBufferMs = latencyConfig.targetBufferMs;
-    // Reinicia buffer adaptativo
     playbackState = 'BUILDING';
     playbackMediaTimeMs = null;
     wallClockAnchorMs = null;
@@ -92,10 +153,12 @@ export function createPlayer(
     }
 
     const config = deserialize(rawConfig);
+    decoderReconfigureCount++;
 
     decoder = new VideoDecoder({
       output: onDecodedFrame,
       error: (err) => {
+        decoderErrors++;
         console.warn('[decoder error]', err.message);
         needKeyframe = true;
         onNeedKeyframe?.();
@@ -166,6 +229,8 @@ export function createPlayer(
     }
 
     try {
+      chunksSubmitted++;
+      chunkCount++;
       decoder.decode(
         new EncodedVideoChunk({
           type: isKeyframe ? 'key' : 'delta',
@@ -175,6 +240,7 @@ export function createPlayer(
       );
       needKeyframe = false;
     } catch (err) {
+      decoderErrors++;
       console.warn('[decode]', err.message);
       needKeyframe = true;
       onNeedKeyframe?.();
@@ -189,6 +255,10 @@ export function createPlayer(
     decCount++;
 
     const agora = performance.now();
+    lastDecodeGapMs = lastDecodeTime !== null ? Math.max(0, agora - lastDecodeTime) : 16.67;
+    lastDecodeTime = agora;
+    decodeIntervalTracker.sampleInterval(lastDecodeGapMs);
+
     const tsMs = usToMs(frame.timestamp ?? 0);
     const isKey = lastChunkWasKeyframe;
     const capGap = lastCaptureGapMs;
@@ -209,11 +279,13 @@ export function createPlayer(
     }
 
     fila.push({ frame, tsMs, isKeyframe: isKey, captureGapMs: capGap });
+    maxLiveFrames = Math.max(maxLiveFrames, fila.length);
 
     // Teto estrito da fila para proteção contra vazamento de memória (ex: >120 quadros / 2 segundos)
     while (fila.length > latencyConfig.filaMax) {
       const dropped = fila.shift();
       dropped.frame.close();
+      framesClosed++;
       framesDropped++;
       droppedRecoveryCount++;
     }
@@ -223,22 +295,18 @@ export function createPlayer(
 
   /**
    * Controlador de Adaptação de Buffer com Histerese.
-   * Evita oscilação ajustando a margem de segurança de forma gradual.
    */
   function updateAdaptiveBuffer(now) {
     const recStats = receiveIntervalTracker.getStats();
     const aClock = getAudioClock?.();
 
-    // Se detecta instabilidade de rede ou áudio baixo, expande o buffer gradualmente
     if (recStats.p95 > 35 || (aClock?.active && aClock.bufferAheadMs < 200)) {
       if (currentTargetBufferMs < latencyConfig.maxBufferMs) {
         currentTargetBufferMs = Math.min(latencyConfig.maxBufferMs, currentTargetBufferMs + 100);
         playbackState = 'RECOVERING';
         stabilityTimer = now;
       }
-    }
-    // Se a rede estiver estável e sem engasgos por mais de 20s, relaxa o buffer devagar
-    else if (now - stabilityTimer > 20000 && recStats.p95 <= 25) {
+    } else if (now - stabilityTimer > 20000 && recStats.p95 <= 25) {
       if (currentTargetBufferMs > latencyConfig.minBufferMs) {
         currentTargetBufferMs = Math.max(latencyConfig.minBufferMs, currentTargetBufferMs - 25);
         stabilityTimer = now;
@@ -248,7 +316,6 @@ export function createPlayer(
       playbackState = currentBufferMs < 300 ? 'LOW' : 'STABLE';
     }
 
-    // Janela deslizante de 10s para min/max buffer
     if (now - bufferWindowTimer >= 10000) {
       minBuffer10s = currentBufferMs;
       maxBuffer10s = currentBufferMs;
@@ -261,18 +328,22 @@ export function createPlayer(
 
   /**
    * Laço de renderização alinhado ao refresh do monitor (RAF).
-   * Renderiza 1 quadro por VSync sincronizado com o Áudio Master Clock (ou Relógio de Vídeo).
    */
   function passo() {
     rafId = null;
     const agora = performance.now();
+    rafCount++;
+
+    lastRafGapMs = lastRafTime !== null ? Math.max(0, agora - lastRafTime) : 16.67;
+    lastRafTime = agora;
+    rafIntervalTracker.sampleInterval(lastRafGapMs);
 
     if (!fila.length) return;
 
     const audioClock = getAudioClock?.();
     let mediaPlaybackTime;
 
-    // 1. Fase de Startup Buffer (acumula colchão antes de começar para evitar micro-pausas)
+    // 1. Fase de Startup Buffer
     if (playbackState === 'BUILDING') {
       const oldestTs = fila[0].tsMs;
       const newestTs = fila[fila.length - 1].tsMs;
@@ -302,7 +373,6 @@ export function createPlayer(
       mediaPlaybackTime = audioClock.mediaTimestampMs;
       lastMediaClockSource = 'AUDIO';
     } else {
-      // Sem áudio: relógio de vídeo autônomo suave
       lastMediaClockSource = 'VIDEO';
       if (playbackMediaTimeMs === null || wallClockAnchorMs === null) {
         playbackMediaTimeMs = fila[0].tsMs;
@@ -324,6 +394,7 @@ export function createPlayer(
 
     // A. Hard Resync (>1800-2000ms de atraso severo): recuperação de emergência
     if (avDrift < -latencyConfig.hardResyncThresholdMs) {
+      hardResyncCount++;
       console.warn(
         `[HARD_RESYNC] atraso inaceitável (${avDrift}ms), solicitando keyframe para recuperar`,
       );
@@ -336,16 +407,16 @@ export function createPlayer(
       return;
     }
 
-    // B. Apresentação Otimizada e Descarte Imediato de Quadros Obsoletos:
-    // Se múltiplos quadros já venceram para este VSync (ex: stream 60fps em display 30Hz ou após jitter de rAF),
-    // avança a fila descartando quadros intermediários obsoletos (fechando seus VideoFrames) e desenha o mais recente.
+    // B. Apresentação Otimizada e Descarte Imediato de Quadros Obsoletos
     let itemParaPintar = null;
     while (fila.length && fila[0].tsMs <= mediaPlaybackTime + 8) {
       const item = fila.shift();
       if (fila.length && fila[0].tsMs <= mediaPlaybackTime + 8) {
         item.frame.close();
+        framesClosed++;
         framesDropped++;
         droppedLateCount++;
+        softCorrectionCount++;
       } else {
         itemParaPintar = item;
         break;
@@ -369,6 +440,7 @@ export function createPlayer(
     while (fila.length) {
       const item = fila.shift();
       item.frame.close();
+      framesClosed++;
       framesDropped++;
     }
     if (rafId !== null) {
@@ -385,8 +457,13 @@ export function createPlayer(
       mudou = true;
     }
 
+    const tStart = performance.now();
     ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
+    lastCanvasDrawDurationMs = Math.max(0, performance.now() - tStart);
+    canvasDrawTracker.sample(lastCanvasDrawDurationMs);
+
     frame.close();
+    framesClosed++;
     framesRendered++;
     renCount++;
 
@@ -395,6 +472,16 @@ export function createPlayer(
     lastRenderTime = now;
     renderIntervalTracker.sampleInterval(renderGapMs);
 
+    const ltStats = getLongTaskStats();
+    const renStats = renderIntervalTracker.getStats();
+    const recStats = receiveIntervalTracker.getStats();
+    const decStats = decodeIntervalTracker.getStats();
+    const rafStats = rafIntervalTracker.getStats();
+    const drawStats = canvasDrawTracker.getStats();
+
+    const expectedInterval = lastCaptureGapMs > 0 && lastCaptureGapMs < 100 ? lastCaptureGapMs : 16.67;
+    const expectedFps = Math.round(1000 / expectedInterval);
+
     stutterDetector.record({
       renderGapMs,
       captureGapMs,
@@ -402,8 +489,27 @@ export function createPlayer(
       isKeyframe,
       networkLagMs: lastLagMs,
       receiveGapMs: lastReceiveGapMs,
+      decodeGapMs: lastDecodeGapMs,
+      rafGapMs: lastRafGapMs,
+      canvasDrawMs: lastCanvasDrawDurationMs,
       decodeQueueSize: decoder?.decodeQueueSize ?? 0,
       presentationQueueSize: fila.length,
+      avDriftMs: lastAvDriftMs,
+      expectedIntervalMs: expectedInterval,
+      expectedFps,
+      receiveFps,
+      decodeFps,
+      renderFps,
+      rafFps,
+      receiveP95: recStats.p95,
+      decodeP95: decStats.p95,
+      renderP95: renStats.p95,
+      rafP95: rafStats.p95,
+      canvasDrawP95: drawStats.p95,
+      longestLongTaskMs: ltStats.longestMs,
+      visibilityState: typeof document !== 'undefined' ? document.visibilityState : 'visible',
+      hasFocus: typeof document !== 'undefined' && document.hasFocus ? document.hasFocus() : true,
+      transport: 'Relay (WebSocket)',
     });
 
     updateFpsMetrics();
@@ -421,12 +527,20 @@ export function createPlayer(
       receiveFps = Math.round(recCount / elapsed);
       decodeFps = Math.round(decCount / elapsed);
       renderFps = Math.round(renCount / elapsed);
+      rafFps = Math.round(rafCount / elapsed);
+      chunksSubmittedSec = Math.round(chunkCount / elapsed);
+
       recCount = 0;
       decCount = 0;
       renCount = 0;
+      rafCount = 0;
+      chunkCount = 0;
       fpsTimer = now;
+
       receiveIntervalTracker.resetWindowCounts();
+      decodeIntervalTracker.resetWindowCounts();
       renderIntervalTracker.resetWindowCounts();
+      rafIntervalTracker.resetWindowCounts();
       stutterDetector.resetWindow();
     }
   }
@@ -449,6 +563,8 @@ export function createPlayer(
     lastAvDriftMs = 0;
     lastPresentationLagMs = 0;
     lastRenderTime = null;
+    lastDecodeTime = null;
+    lastRafTime = null;
     lastReceiveTimestampUs = null;
     if (canvas.width && canvas.height) {
       ctx.fillStyle = '#000';
@@ -461,34 +577,126 @@ export function createPlayer(
     return {
       video: `${canvas.width}×${canvas.height}`,
       box: `${Math.round(rect.width)}×${Math.round(rect.height)}`,
+      backingWidth: canvas.width,
+      backingHeight: canvas.height,
+      cssWidth: Math.round(rect.width),
+      cssHeight: Math.round(rect.height),
+      dpr: typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1,
+      viewport:
+        typeof window !== 'undefined' ? `${window.innerWidth}×${window.innerHeight}` : '1920×1080',
     };
   }
 
   function getMetrics() {
     const aClock = getAudioClock?.();
     const recStats = receiveIntervalTracker.getStats();
+    const decStats = decodeIntervalTracker.getStats();
     const renStats = renderIntervalTracker.getStats();
+    const rafStats = rafIntervalTracker.getStats();
+    const drawStats = canvasDrawTracker.getStats();
     const stutStats = stutterDetector.getStats();
+    const ltStats = getLongTaskStats();
+    const sizes = getSizes();
+
+    const currentlyLiveFrames = Math.max(0, framesDecoded - framesClosed);
 
     return {
       receiveFps,
       decodeFps,
       renderFps,
+      rafFps,
+      chunksSubmittedSec,
       decodeQueueSize: decoder?.decodeQueueSize ?? 0,
       presentationQueueSize: fila.length,
       framesReceived,
       framesDecoded,
       framesRendered,
       framesDropped,
+      framesClosed,
+      currentlyLiveFrames,
+      maxLiveFrames,
       droppedLate: droppedLateCount,
       droppedRecovery: droppedRecoveryCount,
+      hardResyncCount,
+      softCorrectionCount,
+      decoderReconfigureCount,
+      decoderErrors,
       videoLagMs: lastLagMs,
       presentationLagMs: lastPresentationLagMs,
       avDriftMs: lastAvDriftMs,
       clockSource: aClock?.active ? 'AUDIO' : lastMediaClockSource,
       lastKeyframeAgeMs: lastKeyframeAt ? Math.round(performance.now() - lastKeyframeAt) : null,
       latencyMode: currentLatencyMode,
-      sizes: getSizes(),
+      sizes,
+      network: {
+        receiveFps,
+        packetsSec: receiveFps,
+        p50: recStats.p50,
+        p95: recStats.p95,
+        p99: recStats.p99,
+        maxGap: recStats.max,
+        jitter: recStats.jitter,
+        transport: 'Relay (WebSocket)',
+      },
+      decoder: {
+        decodeFps,
+        chunksSubmittedSec,
+        decodeQueueSize: decoder?.decodeQueueSize ?? 0,
+        p50: decStats.p50,
+        p95: decStats.p95,
+        p99: decStats.p99,
+        maxGap: decStats.max,
+        reconfigures: decoderReconfigureCount,
+        errors: decoderErrors,
+      },
+      presentation: {
+        renderFps,
+        queuedFrames: fila.length,
+        droppedTotal: framesDropped,
+        droppedLate: droppedLateCount,
+        droppedRecovery: droppedRecoveryCount,
+        p50: renStats.p50,
+        p95: renStats.p95,
+        p99: renStats.p99,
+        maxGap: renStats.max,
+        hardResyncCount,
+        softCorrectionCount,
+        avDriftMs: lastAvDriftMs,
+        presentationLagMs: lastPresentationLagMs,
+      },
+      raf: {
+        rafFps,
+        p50: rafStats.p50,
+        p95: rafStats.p95,
+        p99: rafStats.p99,
+        maxGap: rafStats.max,
+        visibilityState: typeof document !== 'undefined' ? document.visibilityState : 'visible',
+        hidden: typeof document !== 'undefined' ? document.hidden : false,
+        hasFocus: typeof document !== 'undefined' && document.hasFocus ? document.hasFocus() : true,
+      },
+      mainThread: {
+        longTasks10s: ltStats.count10s,
+        longestTaskMs: ltStats.longestMs,
+        totalLongTaskDurationMs: ltStats.totalDurationMs,
+      },
+      canvas: {
+        drawAvgMs: drawStats.avg,
+        drawP50Ms: drawStats.p50,
+        drawP95Ms: drawStats.p95,
+        drawMaxMs: drawStats.max,
+        backingRes: `${sizes.backingWidth}×${sizes.backingHeight}`,
+        cssRes: `${sizes.cssWidth}×${sizes.cssHeight}`,
+        dpr: sizes.dpr,
+        viewport: sizes.viewport,
+      },
+      videoFrameLifetime: {
+        decoded: framesDecoded,
+        rendered: framesRendered,
+        dropped: framesDropped,
+        closed: framesClosed,
+        currentlyLive: currentlyLiveFrames,
+        maxLive: maxLiveFrames,
+      },
       playbackBuffer: {
         targetMs: currentTargetBufferMs,
         currentMs: currentBufferMs,
@@ -502,14 +710,6 @@ export function createPlayer(
         underruns: aClock?.underrunCount ?? 0,
         avDriftMs: lastAvDriftMs,
       },
-      video: {
-        queuedFrames: fila.length,
-        presentationLagMs: lastPresentationLagMs,
-        renderFps,
-        renderGapP95: renStats.p95,
-        droppedLate: droppedLateCount,
-        droppedRecovery: droppedRecoveryCount,
-      },
       streamLatency: {
         estimatedEndToEndMs: Math.round(lastLagMs + currentBufferMs),
         targetRange: '700-1500 ms',
@@ -517,9 +717,12 @@ export function createPlayer(
       },
       pacing: {
         receiveInterval: recStats,
+        decodeInterval: decStats,
         renderInterval: renStats,
+        rafInterval: rafStats,
         stutter: stutStats,
       },
+      stutterEvents: stutStats.history,
     };
   }
 
@@ -545,19 +748,15 @@ function deserialize(c) {
     codec: c.codec,
     codedWidth: c.codedWidth,
     codedHeight: c.codedHeight,
-    hardwareAcceleration: c.hardwareAcceleration,
+    optimizeForLatency: true,
   };
+
   if (c.description) {
-    if (typeof c.description === 'string') {
-      const bytes = atob(c.description);
-      const arr = new Uint8Array(bytes.length);
-      for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
-      out.description = arr.buffer;
-    } else if (c.description instanceof ArrayBuffer) {
-      out.description = c.description;
-    } else if (ArrayBuffer.isView(c.description)) {
-      out.description = c.description.buffer;
-    }
+    const bin = atob(c.description);
+    const bytes = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+    out.description = bytes;
   }
+
   return out;
 }

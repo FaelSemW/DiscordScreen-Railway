@@ -218,55 +218,18 @@
         </div>
       </div>
 
-            <!-- Debug Overlay HUD para diagnóstico de fluidez, buffer e sincronia A/V -->
+      <!-- Debug Overlay HUD para diagnóstico de fluidez, buffer, rAF e sincronia A/V -->
       <div id="debugOverlay" class="debug-overlay" hidden>
         <div class="debug-header">
-          <strong>DIAGNÓSTICO EM TEMPO REAL</strong>
-          <span id="dbg-stream-status" class="badge" style="background: rgba(34, 197, 94, 0.2); color: #4ade80; padding: 2px 8px; border-radius: 4px; font-size: 11px;">Transmissão estável</span>
-          <button id="debugClose" class="debug-close" aria-label="Fechar HUD">&times;</button>
-        </div>
-        <div class="debug-grid">
-          <div class="debug-section">
-            <span class="debug-title">BUFFER DE REPRODUÇÃO</span>
-            <div class="debug-item"><span>Alvo / Atual:</span> <b id="dbg-buf-target-cur">1000 / 0 ms</b></div>
-            <div class="debug-item"><span>Min / Max (10s):</span> <b id="dbg-buf-min-max">0 / 0 ms</b></div>
-            <div class="debug-item"><span>Estado:</span> <b id="dbg-buf-state">BUILDING</b></div>
+          <div class="debug-header-title">
+            <strong>DIAGNÓSTICO &amp; FORENSE</strong>
+            <span id="dbg-stream-status" class="badge">Estável</span>
           </div>
-          <div class="debug-section">
-            <span class="debug-title">TAXA DE QUADROS (FPS)</span>
-            <div class="debug-item"><span>Recebido:</span> <b id="dbg-fps-rec">0</b></div>
-            <div class="debug-item"><span>Decodificado:</span> <b id="dbg-fps-dec">0</b></div>
-            <div class="debug-item"><span>Renderizado:</span> <b id="dbg-fps-ren">0</b></div>
-          </div>
-          <div class="debug-section">
-            <span class="debug-title">RITMO &amp; STUTTERS (PACING)</span>
-            <div class="debug-item"><span>Rede (Intervalo P95):</span> <b id="dbg-pace-rec">0 ms</b></div>
-            <div class="debug-item"><span>Render (P95 / Max):</span> <b id="dbg-pace-ren">0 / 0 ms</b></div>
-            <div class="debug-item"><span>Stutters (&gt;33 / &gt;50ms):</span> <b id="dbg-stutters">0 / 0</b></div>
-            <div class="debug-item"><span>Último Stutter:</span> <b id="dbg-stutter-last">—</b></div>
-          </div>
-          <div class="debug-section">
-            <span class="debug-title">ÁUDIO &amp; SINCRONIA (A/V)</span>
-            <div class="debug-item"><span>Relógio Mestre:</span> <b id="dbg-clock-source">AUDIO</b></div>
-            <div class="debug-item"><span>Buffer Áudio:</span> <b id="dbg-buf-aud">0 ms</b></div>
-            <div class="debug-item"><span>Underruns Áudio:</span> <b id="dbg-underruns-aud">0</b></div>
-            <div class="debug-item"><span>A/V Drift:</span> <b id="dbg-av-drift">0 ms</b></div>
-          </div>
-          <div class="debug-section">
-            <span class="debug-title">LATÊNCIA &amp; FILAS</span>
-            <div class="debug-item"><span>Latência Estimada E2E:</span> <b id="dbg-lat-e2e">0 ms</b></div>
-            <div class="debug-item"><span>Faixa Alvo / Teto:</span> <b>700–1500 / 2000 ms</b></div>
-            <div class="debug-item"><span>Quadros na Fila:</span> <b id="dbg-q-presentation">0</b></div>
-            <div class="debug-item"><span>Descartes (Atraso/Rec):</span> <b id="dbg-dropped">0 / 0</b></div>
-          </div>
-          <div class="debug-section">
-            <span class="debug-title">RESOLUÇÃO &amp; MODO</span>
-            <div class="debug-item"><span>Vídeo Nativo:</span> <b id="dbg-res-native">—</b></div>
-            <div class="debug-item"><span>Exibição CSS:</span> <b id="dbg-res-css">—</b></div>
-            <div class="debug-item"><span>Modo:</span> <b id="dbg-mode-lat">—</b></div>
+          <div class="debug-header-actions">
+            <button id="btnCopyDiagnostics" class="btn-dbg-action" title="Copiar relatório completo em JSON">Copiar JSON</button>
+            <button id="debugClose" class="debug-close" aria-label="Fechar HUD">&times;</button>
           </div>
         </div>
-      </div>
         <div class="debug-grid">
           <!-- 1. REDE -->
           <div class="debug-section">

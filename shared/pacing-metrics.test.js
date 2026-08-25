@@ -120,6 +120,7 @@ describe('shared/pacing-metrics', () => {
     expect(stats.totalCandidateStutters).toBe(3);
     expect(stats.totalSevereStutters).toBe(2);
     expect(stats.history.length).toBe(2); // Capped by maxHistory
+    expect(stats.countsByCategory).toBeDefined();
 
     detector.resetWindow();
     expect(detector.getStats().windowCandidateStutters).toBe(0);
@@ -127,5 +128,55 @@ describe('shared/pacing-metrics', () => {
     detector.reset();
     expect(detector.getStats().totalCandidateStutters).toBe(0);
     expect(detector.getStats().history.length).toBe(0);
+  });
+
+  it('accurately classifies hitch events across Case A through Case E', () => {
+    // Case D: Canvas draw stall (> 16ms)
+    const caseD = createStutterDetector().record({
+      renderGapMs: 50,
+      canvasDrawMs: 22.5,
+      expectedIntervalMs: 16.67,
+    });
+    expect(caseD.classification.category).toBe('CASE D');
+
+    // Case A: Network / Proxy gap preceded presentation gap
+    const caseA = createStutterDetector().record({
+      renderGapMs: 55,
+      receiveGapMs: 50,
+      decodeGapMs: 16.67,
+      rafGapMs: 16.67,
+      expectedIntervalMs: 16.67,
+    });
+    expect(caseA.classification.category).toBe('CASE A');
+
+    // Case B: Decoder output delay with smooth network
+    const caseB = createStutterDetector().record({
+      renderGapMs: 60,
+      receiveGapMs: 16.67,
+      decodeGapMs: 55,
+      rafGapMs: 16.67,
+      expectedIntervalMs: 16.67,
+    });
+    expect(caseB.classification.category).toBe('CASE B');
+
+    // Case C: rAF delayed with smooth decoder
+    const caseC = createStutterDetector().record({
+      renderGapMs: 65,
+      receiveGapMs: 16.67,
+      decodeGapMs: 16.67,
+      rafGapMs: 60,
+      expectedIntervalMs: 16.67,
+    });
+    expect(caseC.classification.category).toBe('CASE C');
+
+    // Case E: Player clock / Presentation scheduler drift
+    const caseE = createStutterDetector().record({
+      renderGapMs: 50,
+      receiveGapMs: 16.67,
+      decodeGapMs: 16.67,
+      rafGapMs: 16.67,
+      expectedIntervalMs: 16.67,
+    });
+    expect(caseE.classification.category).toBe('CASE E');
   });
 });
