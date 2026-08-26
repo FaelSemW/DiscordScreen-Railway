@@ -2383,11 +2383,15 @@ document.addEventListener('keydown', (e) => {
  */
 function opcoesDaFonte(quality = null) {
   const q = quality || getQualityConfig();
-  return {
+  const opts = {
     preset: q.preset,
     q: String(q.bitrate),
     fps: String(q.fps),
   };
+  if (q.resolution) opts.res = q.resolution;
+  if (q.width) opts.width = String(q.width);
+  if (q.height) opts.height = String(q.height);
+  return opts;
 }
 
 /** Nome da aba de captura, para reencontrá-la em vez de empilhar outra. */
@@ -2433,6 +2437,9 @@ function urlDaCaptura(fonte, quality = null) {
   url.searchParams.set('preset', q.preset);
   url.searchParams.set('q', String(q.bitrate));
   url.searchParams.set('fps', String(q.fps));
+  if (q.resolution) url.searchParams.set('res', q.resolution);
+  if (q.width) url.searchParams.set('width', String(q.width));
+  if (q.height) url.searchParams.set('height', String(q.height));
   url.searchParams.set('fonte', fonte);
   return url;
 }

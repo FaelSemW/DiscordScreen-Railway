@@ -407,10 +407,18 @@ export function createBroadcaster(opts) {
     targetWidth = currentLadder[0].width;
     targetHeight = currentLadder[0].height;
   } else {
-    bitrate = Number(rawBitrate) || 4_000_000;
-    fps = Number(rawFps) || 30;
-    targetWidth = Number(opts.width) || (fps === 60 ? 1920 : 1600);
-    targetHeight = Number(opts.height) || (fps === 60 ? 1080 : 900);
+    const customConfig = validateQualityConfig({
+      preset: 'personalizado',
+      resolution: opts.resolution || opts.res,
+      width: opts.width,
+      height: opts.height,
+      fps: rawFps ?? opts.fps,
+      bitrate: rawBitrate ?? opts.bitrate,
+    });
+    bitrate = customConfig.bitrate;
+    fps = customConfig.fps;
+    targetWidth = customConfig.width;
+    targetHeight = customConfig.height;
   }
 
   let ws = null;
@@ -1738,6 +1746,7 @@ export function createBroadcaster(opts) {
   function setQuality({
     preset: nextPreset,
     priority: nextPriority,
+    resolution: nextResolution,
     bitrate: nextBitrate,
     fps: nextFps,
     width: _nextWidth,
@@ -1760,6 +1769,19 @@ export function createBroadcaster(opts) {
         nextFps = p.fps;
         targetWidth = p.width;
         targetHeight = p.height;
+      } else if (currentPreset === 'personalizado') {
+        const customValidated = validateQualityConfig({
+          preset: 'personalizado',
+          resolution: nextResolution,
+          width: _nextWidth,
+          height: _nextHeight,
+          fps: nextFps ?? fps,
+          bitrate: nextBitrate ?? bitrate,
+        });
+        nextBitrate = customValidated.bitrate;
+        nextFps = customValidated.fps;
+        targetWidth = customValidated.width;
+        targetHeight = customValidated.height;
       }
     }
 

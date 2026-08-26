@@ -19,6 +19,7 @@ import {
   fonteIndisponivel,
   opcoesTela,
   QUALITY_PRESETS,
+  validateQualityConfig,
 } from '/shared/broadcaster.js?v=9';
 
 const $ = (id) => document.getElementById(id);
@@ -45,6 +46,7 @@ function guardadas() {
 const salvas = guardadas();
 const opcoes = {
   preset: query.get('preset') || salvas.preset || 'automatico',
+  resolution: query.get('res') || query.get('resolution') || salvas.resolution || '900p',
   priority: query.get('prioridade') || salvas.priority || 'fluidez',
   bitrate: Number(query.get('q')) || Number(salvas.bitrate) || 8_000_000,
   fps: Number(query.get('fps')) || Number(salvas.fps) || 60,
@@ -72,12 +74,22 @@ function getEffectiveQuality() {
       priority: QUALITY_PRESETS[p].priority || 'fluidez',
     };
   }
+
+  // Personalizado: valida e extrai resolução (720p/900p/1080p), width e height canônicos
+  const custom = validateQualityConfig({
+    preset: 'personalizado',
+    resolution: opcoes.resolution,
+    fps: opcoes.fps,
+    bitrate: opcoes.bitrate,
+  });
+
   return {
     preset: 'personalizado',
-    width: 1600,
-    height: 900,
-    fps: Number(opcoes.fps) || 30,
-    bitrate: Number(opcoes.bitrate) || 4_000_000,
+    resolution: custom.resolution,
+    width: custom.width,
+    height: custom.height,
+    fps: custom.fps,
+    bitrate: custom.bitrate,
     priority: opcoes.priority || 'fluidez',
   };
 }
@@ -93,6 +105,7 @@ function guardar() {
 function espelharOpcoes() {
   if ($('preset-qualidade')) $('preset-qualidade').value = opcoes.preset;
   if ($('personalizado-wrap')) $('personalizado-wrap').hidden = opcoes.preset !== 'personalizado';
+  if ($('resolucao')) $('resolucao').value = opcoes.resolution || '900p';
   if ($('qualidade')) $('qualidade').value = String(opcoes.bitrate);
   if ($('quadros')) $('quadros').value = String(opcoes.fps);
   if ($('prioridade')) $('prioridade').value = opcoes.priority;
@@ -101,6 +114,7 @@ function espelharOpcoes() {
 function aplicarOpcoes(novas) {
   if (!novas) return;
   if (novas.preset) opcoes.preset = novas.preset;
+  if (novas.res || novas.resolution) opcoes.resolution = novas.res || novas.resolution;
   if (novas.prioridade) opcoes.priority = novas.prioridade;
   if (Number(novas.q)) opcoes.bitrate = Number(novas.q);
   if (Number(novas.fps)) opcoes.fps = Number(novas.fps);
@@ -127,6 +141,13 @@ function mudarPrioridade(priority) {
 function mudarOpcao(chave, valor) {
   if (!Number(valor)) return;
   opcoes[chave] = Number(valor);
+  guardar();
+  for (const painel of Object.values(paineis)) painel?.aplicarQualidade?.();
+}
+
+function mudarOpcaoTexto(chave, valor) {
+  if (!valor) return;
+  opcoes[chave] = String(valor);
   guardar();
   for (const painel of Object.values(paineis)) painel?.aplicarQualidade?.();
 }
@@ -681,6 +702,7 @@ $('somAba')?.addEventListener('click', async () => {
 
 espelharOpcoes();
 $('preset-qualidade')?.addEventListener('change', (e) => mudarPreset(e.target.value));
+$('resolucao')?.addEventListener('change', (e) => mudarOpcaoTexto('resolution', e.target.value));
 $('prioridade')?.addEventListener('change', (e) => mudarPrioridade(e.target.value));
 $('qualidade')?.addEventListener('change', (e) => mudarOpcao('bitrate', e.target.value));
 $('quadros')?.addEventListener('change', (e) => mudarOpcao('fps', e.target.value));
