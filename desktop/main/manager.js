@@ -24,6 +24,8 @@ export class ProcessManager extends EventEmitter {
     this.startPromise = null;
     this.reconnectTimer = null;
     this.isStopping = false;
+    this._connectPromise = null;
+    this._connectionGeneration = 0;
   }
 
   getVerifiedPublicOrigin() {
@@ -143,21 +145,39 @@ export class ProcessManager extends EventEmitter {
     }
   }
 
-  async _connectControlChannel() {
+    async _connectControlChannel() {
     if (this.controlWs && this.controlWs.readyState === WebSocket.OPEN) {
       return;
     }
+    if (this._connectPromise) {
+      return this._connectPromise;
+    }
+
+    this._connectPromise = this._doConnectControlChannel();
+    try {
+      return await this._connectPromise;
+    } finally {
+      this._connectPromise = null;
+    }
+  }
+
+  async _doConnectControlChannel() {
+    const currentGeneration = ++this._connectionGeneration;
 
     if (this.controlWs) {
+      const oldWs = this.controlWs;
+      this.controlWs = null;
       try {
-        this.controlWs.terminate();
+        oldWs.removeAllListeners();
+        oldWs.terminate();
       } catch {
         // Ignore
       }
-      this.controlWs = null;
     }
 
-    const wsUrl = 'wss://zaprecovery.online/control';
+    const verifiedOrigin = this.getVerifiedPublicOrigin();
+    const wsBaseUrl = verifiedOrigin.replace(/^http/, 'ws');
+    const wsUrl = `${wsBaseUrl}/control`;
     logger.info(`Conectando canal de controle desktop em ${wsUrl}...`);
 
     return new Promise((resolve, reject) => {
@@ -169,7 +189,7 @@ export class ProcessManager extends EventEmitter {
       const timeout = setTimeout(() => {
         if (!resolved) {
           resolved = true;
-          ws.terminate();
+          try { ws.terminate(); } catch {}
           reject(new Error('Tempo limite esgotado ao conectar ao canal de controle do Railway.'));
         }
       }, 8000);
@@ -184,16 +204,20 @@ export class ProcessManager extends EventEmitter {
 
       ws.on('open', () => {
         clearTimeout(timeout);
+        if (this._connectionGeneration !== currentGeneration) {
+          try { ws.close(); } catch {}
+          return;
+        }
         if (!resolved) {
           resolved = true;
           logger.info('Canal de controle conectado ao servidor Railway com sucesso.');
-          
+
           clearInterval(pingInterval);
           pingInterval = setInterval(() => {
             if (ws.readyState === WebSocket.OPEN) {
               ws.send(JSON.stringify({ type: 'ping', timestamp: Date.now() }));
             }
-          }, 20_000);
+          }, 10_000);
 
           // Register active client ID
           ws.send(
@@ -207,6 +231,7 @@ export class ProcessManager extends EventEmitter {
       });
 
       ws.on('message', async (data) => {
+        if (this._connectionGeneration !== currentGeneration) return;
         let msg;
         try {
           msg = JSON.parse(data.toString());
@@ -234,9 +259,11 @@ export class ProcessManager extends EventEmitter {
 
       ws.on('close', () => {
         clearInterval(pingInterval);
-        logger.warn('Canal de controle do Railway desconectado.');
-        if (!this.isStopping && this.state === STATES.READY) {
-          this._scheduleReconnect();
+        if (this._connectionGeneration === currentGeneration) {
+          logger.warn('Canal de controle do Railway desconectado.');
+          if (!this.isStopping && this.state === STATES.READY) {
+            this._scheduleReconnect();
+          }
         }
       });
 

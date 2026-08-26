@@ -407,10 +407,24 @@ function derrubarAbandonadas(room, now) {
       entry.semDonoDesde = null;
       continue;
     }
+    // 1. Broadcaster tem viewer próprio na sala
     if (temViewer(room, entry.info.id)) {
       entry.semDonoDesde = null;
       continue;
     }
+    // 2. Aba de captura/controle da pessoa ainda está conectada
+    const temControle = [...room.controles].some((ws) => ws.__controlOf === entry.info.id);
+    if (temControle) {
+      entry.semDonoDesde = null;
+      continue;
+    }
+    // 3. Há espectadores assistindo ativamente a transmissão
+    const temEspectadores = watchersOf(room, entry.slot).length > 0;
+    if (temEspectadores) {
+      entry.semDonoDesde = null;
+      continue;
+    }
+
     if (entry.semDonoDesde === null) {
       entry.semDonoDesde = now;
       continue;
@@ -419,9 +433,9 @@ function derrubarAbandonadas(room, now) {
 
     sendJson(entry.ws, {
       type: 'stop-request',
-      motivo: 'Você saiu da atividade, então a transmissão parou.',
+      motivo: 'A sala ficou vazia, então a transmissão parou.',
     });
-    console.log(`[room ${room.id}] ${entry.info.name} saiu da sala — ${entry.fonte} encerrada`);
+    console.log(`[room ${room.id}] ${entry.info.name} ausente sem espectadores — ${entry.fonte} encerrada`);
     detachBroadcaster(room, entry.ws);
   }
 }

@@ -2050,7 +2050,7 @@ function connect() {
       if (ws?.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'ping', timestamp: Date.now() }));
       }
-    }, 20_000);
+    }, 10_000);
 
     // O apelido é do cliente, então precisa ser reenviado a cada conexão —
     // inclusive nas reconexões, senão o nome volta ao do Discord sozinho.
@@ -2808,4 +2808,26 @@ function copyStutterLog() {
 if (typeof window !== 'undefined') {
   window.getStutterLog = getStutterLog;
   window.copyStutterLog = copyStutterLog;
+}
+
+function onPageWake() {
+  if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      if (roomTokens && !abriu) {
+        connect();
+      }
+    } else {
+      try {
+        ws.send(JSON.stringify({ type: 'ping', timestamp: Date.now() }));
+      } catch {}
+    }
+  }
+}
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', onPageWake);
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('pageshow', onPageWake);
+  window.addEventListener('online', onPageWake);
+  window.addEventListener('focus', onPageWake);
 }
