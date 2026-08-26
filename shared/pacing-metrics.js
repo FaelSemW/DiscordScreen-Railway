@@ -7,6 +7,7 @@
  * - Encode durations & queue sizes
  * - Network receive intervals
  * - Viewer presentation intervals & stutter events (>33ms, >50ms, >75ms)
+ * - Forensic hitch classification (Case A through Case E)
  */
 
 export function createIntervalTracker(windowSize = 120) {
@@ -204,16 +205,75 @@ export function createValueTracker(windowSize = 120) {
   };
 }
 
+export function classifyHitch({
+  renderGapMs,
+  captureGapMs = 16.67,
+  decodeGapMs = 16.67,
+  rafGapMs = 16.67,
+  canvasDrawMs = 0,
+  longestLongTaskMs = 0,
+  presentationQueueSize = 0,
+  decodeQueueSize = 0,
+  expectedIntervalMs = 16.67,
+}) {
+  const threshold = expectedIntervalMs > 25 ? 45.0 : 25.0;
+
+  // Case D: Main Thread Long Task
+  if (longestLongTaskMs >= 30.0 || canvasDrawMs >= 20.0) {
+    return {
+      code: 'CASE_D',
+      name: 'Main-Thread / Discord Client Block',
+      details: `LongTask: ${longestLongTaskMs}ms, Draw: ${canvasDrawMs}ms`,
+    };
+  }
+
+  // Case C: rAF Throttling / Cadence Drop
+  if (rafGapMs >= threshold + 10.0 && presentationQueueSize > 0) {
+    return {
+      code: 'CASE_C',
+      name: 'rAF Scheduling / Discord Viewport Throttling',
+      details: `rAF Gap: ${rafGapMs}ms with ${presentationQueueSize} frames queued`,
+    };
+  }
+
+  // Case B: Hardware VideoDecoder Backlog
+  if (decodeGapMs >= threshold + 10.0 && decodeQueueSize > 1) {
+    return {
+      code: 'CASE_B',
+      name: 'Hardware Decoder Pipeline Delay',
+      details: `Decode Gap: ${decodeGapMs}ms, HW Queue: ${decodeQueueSize}`,
+    };
+  }
+
+  // Case A: Capture / Ingestion Delivery Gap
+  if (captureGapMs >= threshold) {
+    return {
+      code: 'CASE_A',
+      name: 'Host Ingestion / Network Delivery Starvation',
+      details: `Source/Capture Gap: ${captureGapMs}ms`,
+    };
+  }
+
+  // Case E: Audio/Video Clock Drift / Adaptive Jitter Correction
+  return {
+    code: 'CASE_E',
+    name: 'Clock Drift / Adaptive Resync',
+    details: `RenderGap: ${renderGapMs}ms (Pacing divergence)`,
+  };
+}
+
 export function createStutterDetector({
   candidateThresholdMs = 40,
   severeThresholdMs = 75,
-  maxHistory = 10,
+  maxHistory = 25,
 } = {}) {
   const history = [];
   let totalCandidateStutters = 0;
   let totalSevereStutters = 0;
   let windowCandidateStutters = 0;
   let windowSevereStutters = 0;
+
+  const caseCounts = { A: 0, B: 0, C: 0, D: 0, E: 0 };
 
   function record({
     renderGapMs,
@@ -222,8 +282,27 @@ export function createStutterDetector({
     isKeyframe = false,
     networkLagMs = null,
     receiveGapMs = null,
+    decodeGapMs = null,
+    rafGapMs = null,
+    canvasDrawMs = null,
     decodeQueueSize = 0,
     presentationQueueSize = 0,
+    avDriftMs = 0,
+    expectedIntervalMs = 16.67,
+    expectedFps = 60,
+    receiveFps = 0,
+    decodeFps = 0,
+    renderFps = 0,
+    rafFps = 0,
+    receiveP95 = 0,
+    decodeP95 = 0,
+    renderP95 = 0,
+    rafP95 = 0,
+    canvasDrawP95 = 0,
+    longestLongTaskMs = 0,
+    visibilityState = 'visible',
+    hasFocus = true,
+    transport = 'Relay (WebSocket)',
   }) {
     const isCandidate = renderGapMs >= candidateThresholdMs;
     const isSevere = renderGapMs >= severeThresholdMs;
@@ -238,6 +317,24 @@ export function createStutterDetector({
     }
 
     if (isCandidate) {
+      const suspect = classifyHitch({
+        renderGapMs,
+        captureGapMs: captureGapMs ?? 16.67,
+        decodeGapMs: decodeGapMs ?? 16.67,
+        rafGapMs: rafGapMs ?? 16.67,
+        canvasDrawMs: canvasDrawMs ?? 0,
+        longestLongTaskMs,
+        presentationQueueSize,
+        decodeQueueSize,
+        expectedIntervalMs,
+      });
+
+      if (suspect.code === 'CASE_A') caseCounts.A++;
+      else if (suspect.code === 'CASE_B') caseCounts.B++;
+      else if (suspect.code === 'CASE_C') caseCounts.C++;
+      else if (suspect.code === 'CASE_D') caseCounts.D++;
+      else if (suspect.code === 'CASE_E') caseCounts.E++;
+
       const snapshot = {
         timestamp: Date.now(),
         renderGapMs: Math.round(renderGapMs * 10) / 10,
@@ -246,9 +343,31 @@ export function createStutterDetector({
         isKeyframe,
         networkLagMs: networkLagMs !== null ? Math.round(networkLagMs) : null,
         receiveGapMs: receiveGapMs !== null ? Math.round(receiveGapMs * 10) / 10 : null,
+        decodeGapMs: decodeGapMs !== null ? Math.round(decodeGapMs * 10) / 10 : null,
+        rafGapMs: rafGapMs !== null ? Math.round(rafGapMs * 10) / 10 : null,
+        canvasDrawMs: canvasDrawMs !== null ? Math.round(canvasDrawMs * 10) / 10 : null,
         decodeQueueSize,
         presentationQueueSize,
+        avDriftMs: Math.round(avDriftMs),
         severity: isSevere ? 'severe' : 'candidate',
+        primarySuspect: suspect,
+        telemetry: {
+          expectedIntervalMs,
+          expectedFps,
+          receiveFps,
+          decodeFps,
+          renderFps,
+          rafFps,
+          receiveP95,
+          decodeP95,
+          renderP95,
+          rafP95,
+          canvasDrawP95,
+          longestLongTaskMs,
+          visibilityState,
+          hasFocus,
+          transport,
+        },
       };
 
       history.unshift(snapshot);
@@ -264,6 +383,7 @@ export function createStutterDetector({
       totalSevereStutters,
       windowCandidateStutters,
       windowSevereStutters,
+      caseCounts: { ...caseCounts },
       latestSnapshot: history[0] ?? null,
       history: [...history],
     };
@@ -278,6 +398,11 @@ export function createStutterDetector({
     history.length = 0;
     totalCandidateStutters = 0;
     totalSevereStutters = 0;
+    caseCounts.A = 0;
+    caseCounts.B = 0;
+    caseCounts.C = 0;
+    caseCounts.D = 0;
+    caseCounts.E = 0;
     resetWindow();
   }
 

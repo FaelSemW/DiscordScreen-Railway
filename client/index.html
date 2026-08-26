@@ -218,20 +218,75 @@
         </div>
       </div>
 
-      <!-- Debug Overlay HUD para diagnóstico de fluidez, buffer e sincronia A/V -->
+            <!-- Debug Overlay HUD para diagnóstico de fluidez, buffer, rAF e sincronia A/V -->
       <div id="debugOverlay" class="debug-overlay" hidden>
         <div class="debug-header">
           <strong>DIAGNÓSTICO EM TEMPO REAL</strong>
-          <span id="dbg-stream-status" class="badge" style="background: rgba(34, 197, 94, 0.2); color: #4ade80; padding: 2px 8px; border-radius: 4px; font-size: 11px;">Transmissão estável</span>
+          <span id="dbg-stream-status" class="badge badge-stable">Transmissão estável</span>
           <button id="debugClose" class="debug-close" aria-label="Fechar HUD">&times;</button>
         </div>
-        <div class="debug-grid">
+        <div class="debug-scroll-container">
+          <!-- SEÇÃO 1: REDE & PROXY -->
           <div class="debug-section">
-            <span class="debug-title">BUFFER DE REPRODUÇÃO</span>
-            <div class="debug-item"><span>Alvo / Atual:</span> <b id="dbg-buf-target-cur">1000 / 0 ms</b></div>
-            <div class="debug-item"><span>Min / Max (10s):</span> <b id="dbg-buf-min-max">0 / 0 ms</b></div>
-            <div class="debug-item"><span>Estado:</span> <b id="dbg-buf-state">BUILDING</b></div>
+            <span class="debug-title">1. REDE &amp; PROXY</span>
+            <div class="debug-item"><span>Vídeo / Áudio:</span> <b id="dbg-net-pkts">0 / 0 fps</b></div>
+            <div class="debug-item"><span>Intervalo (p50/95/99):</span> <b id="dbg-net-p50-p95-p99">0 / 0 / 0 ms</b></div>
+            <div class="debug-item"><span>Maior Buraco (Gap):</span> <b id="dbg-net-max-gap">0 ms</b></div>
+            <div class="debug-item"><span>Transporte:</span> <b id="dbg-net-transport">WebSocket (Relay)</b></div>
           </div>
+
+          <!-- SEÇÃO 2: DECODIFICADOR -->
+          <div class="debug-section">
+            <span class="debug-title">2. DECODIFICADOR (WebCodecs)</span>
+            <div class="debug-item"><span>Chunks / Fila HW:</span> <b id="dbg-dec-chunks">0/s · Q: 0</b></div>
+            <div class="debug-item"><span>Decode FPS:</span> <b id="dbg-dec-fps">0 fps</b></div>
+            <div class="debug-item"><span>Intervalo (p50/95/99):</span> <b id="dbg-dec-p50-p95-p99">0 / 0 / 0 ms</b></div>
+            <div class="debug-item"><span>Maior Gap Decodificação:</span> <b id="dbg-dec-max-gap">0 ms</b></div>
+            <div class="debug-item"><span>Reconfigs / Erros:</span> <b id="dbg-dec-reconfig-err">0 / 0</b></div>
+          </div>
+
+          <!-- SEÇÃO 3: APRESENTAÇÃO & SCHEDULER -->
+          <div class="debug-section">
+            <span class="debug-title">3. APRESENTAÇÃO &amp; SCHEDULER</span>
+            <div class="debug-item"><span>Quadros na Fila:</span> <b id="dbg-pres-q">0</b></div>
+            <div class="debug-item"><span>FPS Renderizado:</span> <b id="dbg-pres-fps">0 fps</b></div>
+            <div class="debug-item"><span>Intervalo (p50/95/99):</span> <b id="dbg-pres-p50-p95-p99">0 / 0 / 0 ms</b></div>
+            <div class="debug-item"><span>Maior Gap Apresentação:</span> <b id="dbg-pres-max-gap">0 ms</b></div>
+            <div class="debug-item"><span>Descartes (Atraso/Rec):</span> <b id="dbg-pres-drops">0 / 0</b></div>
+            <div class="debug-item"><span>A/V Drift / E2E:</span> <b id="dbg-pres-drift-lat">0 ms / 0 ms</b></div>
+            <div class="debug-item"><span>Resyncs (Hard / Soft):</span> <b id="dbg-pres-resync">0 / 0</b></div>
+          </div>
+
+          <!-- SEÇÃO 4: RAF & CONTEXTO DISCORD -->
+          <div class="debug-section">
+            <span class="debug-title">4. RAF &amp; CONTEXTO DISCORD</span>
+            <div class="debug-item"><span>rAF Cadência:</span> <b id="dbg-raf-fps">0 Hz</b></div>
+            <div class="debug-item"><span>rAF (p50/95/99):</span> <b id="dbg-raf-p50-p95-p99">0 / 0 / 0 ms</b></div>
+            <div class="debug-item"><span>Maior Buraco rAF:</span> <b id="dbg-raf-max-gap">0 ms</b></div>
+            <div class="debug-item"><span>Visibilidade / Foco:</span> <b id="dbg-raf-context">visible · focused</b></div>
+          </div>
+
+          <!-- SEÇÃO 5: MAIN THREAD & CANVAS -->
+          <div class="debug-section">
+            <span class="debug-title">5. MAIN THREAD &amp; CANVAS</span>
+            <div class="debug-item"><span>Tarefas Longas (10s):</span> <b id="dbg-mt-tasks10s">0 (Max: 0ms)</b></div>
+            <div class="debug-item"><span>DrawImage (méd/95/max):</span> <b id="dbg-canvas-draw">0.0 / 0.0 / 0.0 ms</b></div>
+            <div class="debug-item"><span>Resolução Nativa / CSS:</span> <b id="dbg-canvas-res">— / —</b></div>
+            <div class="debug-item"><span>DPR / Viewport:</span> <b id="dbg-canvas-dpr-vp">1.0 / —</b></div>
+          </div>
+
+          <!-- SEÇÃO 6: CLASSIFICADOR DE ENGASGOS (STUTTERS) -->
+          <div class="debug-section debug-section-stutters">
+            <span class="debug-title">6. CLASSIFICADOR DE ENGASGOS (STUTTERS)</span>
+            <div class="debug-item"><span>Causas Detectadas:</span> <b id="dbg-stutter-counts">A:0 B:0 C:0 D:0 E:0</b></div>
+            <div class="debug-item debug-item-col">
+              <span style="margin-bottom: 2px;">Último Engasgo:</span>
+              <div id="dbg-stutter-latest" class="stutter-log-box">Nenhum engasgo detectado.</div>
+            </div>
+            <button id="btnCopyDiagnostics" class="btn-copy-diag" type="button">Copiar Relatório de Diagnóstico</button>
+          </div>
+        </div>
+      </div>
           <div class="debug-section">
             <span class="debug-title">TAXA DE QUADROS (FPS)</span>
             <div class="debug-item"><span>Recebido:</span> <b id="dbg-fps-rec">0</b></div>

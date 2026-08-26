@@ -1,9 +1,13 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
+import fs from 'fs';
+import path from 'path';
 import {
   createIntervalTracker,
   createValueTracker,
   createStutterDetector,
+  classifyHitch,
 } from './pacing-metrics.js';
+import { createPlayer } from '../client/src/player.js';
 
 describe('shared/pacing-metrics', () => {
   it('handles empty interval tracker stats cleanly', () => {
@@ -127,5 +131,110 @@ describe('shared/pacing-metrics', () => {
     detector.reset();
     expect(detector.getStats().totalCandidateStutters).toBe(0);
     expect(detector.getStats().history.length).toBe(0);
+  });
+
+  it('accurately classifies hitch events across Case A through Case E', () => {
+    // Case D: Main thread long task
+    const hitchD = classifyHitch({
+      renderGapMs: 55.0,
+      longestLongTaskMs: 45.0,
+    });
+    expect(hitchD.code).toBe('CASE_D');
+
+    // Case C: rAF throttling with queue backlog
+    const hitchC = classifyHitch({
+      renderGapMs: 50.0,
+      rafGapMs: 48.0,
+      presentationQueueSize: 2,
+    });
+    expect(hitchC.code).toBe('CASE_C');
+
+    // Case B: Hardware decoder backlog
+    const hitchB = classifyHitch({
+      renderGapMs: 48.0,
+      decodeGapMs: 42.0,
+      decodeQueueSize: 3,
+    });
+    expect(hitchB.code).toBe('CASE_B');
+
+    // Case A: Capture starvation
+    const hitchA = classifyHitch({
+      renderGapMs: 45.0,
+      captureGapMs: 40.0,
+    });
+    expect(hitchA.code).toBe('CASE_A');
+
+    // Case E: Jitter / clock divergence fallback
+    const hitchE = classifyHitch({
+      renderGapMs: 42.0,
+      captureGapMs: 16.67,
+      decodeGapMs: 16.67,
+      rafGapMs: 16.67,
+      longestLongTaskMs: 0,
+      decodeQueueSize: 0,
+      presentationQueueSize: 0,
+    });
+    expect(hitchE.code).toBe('CASE_E');
+  });
+
+  it('preserves production decoder config contract: optimizeForLatency=true and Uint8Array description', () => {
+    let configuredOptions = null;
+    const fakeDecoder = {
+      configure: (cfg) => { configuredOptions = cfg; },
+      close: () => {},
+      decode: () => {},
+      state: 'configured',
+      decodeQueueSize: 0,
+    };
+    globalThis.VideoDecoder = vi.fn(function () { return fakeDecoder; });
+
+    const canvas = {
+      getContext: () => ({ drawImage: () => {}, fillRect: () => {} }),
+      getBoundingClientRect: () => ({ width: 1280, height: 720 }),
+      width: 1280,
+      height: 720,
+    };
+
+    const player = createPlayer(canvas);
+    const rawConfig = {
+      codec: 'avc1.64002a',
+      codedWidth: 1280,
+      codedHeight: 720,
+      description: 'AQIDBA==', // base64 for bytes [1, 2, 3, 4]
+    };
+
+    const started = player.start(rawConfig);
+    expect(started).toBe(true);
+    expect(configuredOptions).toBeDefined();
+    expect(configuredOptions.codec).toBe('avc1.64002a');
+    expect(configuredOptions.codedWidth).toBe(1280);
+    expect(configuredOptions.codedHeight).toBe(720);
+    expect(configuredOptions.optimizeForLatency).toBe(true);
+    expect(configuredOptions.hardwareAcceleration).toBeUndefined();
+    expect(configuredOptions.description).toBeInstanceOf(Uint8Array);
+    expect(Array.from(configuredOptions.description)).toEqual([1, 2, 3, 4]);
+
+    player.stop();
+  });
+
+  it('guarantees single debug overlay root and unique DOM element IDs in client/index.html', () => {
+    const htmlPath = path.resolve(__dirname, '../client/index.html');
+    const html = fs.readFileSync(htmlPath, 'utf8');
+
+    // 1. Single debugOverlay root
+    const overlayMatches = html.match(/id="debugOverlay"/g);
+    expect(overlayMatches).not.toBeNull();
+    expect(overlayMatches.length).toBe(1);
+
+    // 2. All element IDs are strictly unique
+    const idRegex = /id="([^"]+)"/g;
+    const ids = [];
+    let match;
+    while ((match = idRegex.exec(html)) !== null) {
+      ids.push(match[1]);
+    }
+
+    const duplicateIds = ids.filter((id, index) => ids.indexOf(id) !== index);
+    expect(duplicateIds).toEqual([]);
   });
 });

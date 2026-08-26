@@ -156,98 +156,145 @@ function updateDebugOverlay() {
 
   const s = activeSlot !== null ? streams.get(activeSlot) : [...streams.values()][0];
   if (!s || !s.player) {
-    if ($('dbg-buf-target-cur')) $('dbg-buf-target-cur').textContent = '1000 / 0 ms';
-    if ($('dbg-buf-min-max')) $('dbg-buf-min-max').textContent = '0 / 0 ms';
-    if ($('dbg-buf-state')) $('dbg-buf-state').textContent = 'BUILDING';
-    $('dbg-fps-rec').textContent = '0';
-    $('dbg-fps-dec').textContent = '0';
-    $('dbg-fps-ren').textContent = '0';
-    if ($('dbg-pace-rec')) $('dbg-pace-rec').textContent = '0 ms';
-    if ($('dbg-pace-ren')) $('dbg-pace-ren').textContent = '0 / 0 ms';
-    if ($('dbg-stutters')) $('dbg-stutters').textContent = '0 / 0';
-    if ($('dbg-stutter-last')) $('dbg-stutter-last').textContent = '—';
-    if ($('dbg-clock-source')) $('dbg-clock-source').textContent = '—';
-    if ($('dbg-buf-aud')) $('dbg-buf-aud').textContent = '0 ms';
-    if ($('dbg-underruns-aud')) $('dbg-underruns-aud').textContent = '0';
-    if ($('dbg-av-drift')) $('dbg-av-drift').textContent = '—';
-    if ($('dbg-lat-e2e')) $('dbg-lat-e2e').textContent = '0 ms';
-    if ($('dbg-q-presentation')) $('dbg-q-presentation').textContent = '0';
-    if ($('dbg-dropped')) $('dbg-dropped').textContent = '0 / 0';
-    $('dbg-res-native').textContent = '—';
-    $('dbg-res-css').textContent = '—';
-    $('dbg-mode-lat').textContent = `${currentLatencyMode.toUpperCase()} / ${currentFitMode}`;
+    if ($('dbg-net-pkts')) $('dbg-net-pkts').textContent = '0 / 0 fps';
+    if ($('dbg-net-p50-p95-p99')) $('dbg-net-p50-p95-p99').textContent = '0 / 0 / 0 ms';
+    if ($('dbg-net-max-gap')) $('dbg-net-max-gap').textContent = '0 ms';
+    if ($('dbg-dec-chunks')) $('dbg-dec-chunks').textContent = '0/s · Q: 0';
+    if ($('dbg-dec-fps')) $('dbg-dec-fps').textContent = '0 fps';
+    if ($('dbg-dec-p50-p95-p99')) $('dbg-dec-p50-p95-p99').textContent = '0 / 0 / 0 ms';
+    if ($('dbg-dec-max-gap')) $('dbg-dec-max-gap').textContent = '0 ms';
+    if ($('dbg-dec-reconfig-err')) $('dbg-dec-reconfig-err').textContent = '0 / 0';
+    if ($('dbg-pres-q')) $('dbg-pres-q').textContent = '0';
+    if ($('dbg-pres-fps')) $('dbg-pres-fps').textContent = '0 fps';
+    if ($('dbg-pres-p50-p95-p99')) $('dbg-pres-p50-p95-p99').textContent = '0 / 0 / 0 ms';
+    if ($('dbg-pres-max-gap')) $('dbg-pres-max-gap').textContent = '0 ms';
+    if ($('dbg-pres-drops')) $('dbg-pres-drops').textContent = '0 / 0';
+    if ($('dbg-pres-drift-lat')) $('dbg-pres-drift-lat').textContent = '0 ms / 0 ms';
+    if ($('dbg-pres-resync')) $('dbg-pres-resync').textContent = '0 / 0';
+    if ($('dbg-raf-fps')) $('dbg-raf-fps').textContent = '0 Hz';
+    if ($('dbg-raf-p50-p95-p99')) $('dbg-raf-p50-p95-p99').textContent = '0 / 0 / 0 ms';
+    if ($('dbg-raf-max-gap')) $('dbg-raf-max-gap').textContent = '0 ms';
+    if ($('dbg-raf-context')) $('dbg-raf-context').textContent = 'visible · focused';
+    if ($('dbg-mt-tasks10s')) $('dbg-mt-tasks10s').textContent = '0 (Max: 0ms)';
+    if ($('dbg-canvas-draw')) $('dbg-canvas-draw').textContent = '0.0 / 0.0 / 0.0 ms';
+    if ($('dbg-canvas-res')) $('dbg-canvas-res').textContent = '— / —';
+    if ($('dbg-canvas-dpr-vp')) $('dbg-canvas-dpr-vp').textContent = '1.0 / —';
+    if ($('dbg-stutter-counts')) $('dbg-stutter-counts').textContent = 'A:0 B:0 C:0 D:0 E:0';
+    if ($('dbg-stutter-latest')) $('dbg-stutter-latest').textContent = 'Aguardando fluxo...';
     return;
   }
 
   const m = s.player.getMetrics();
   const a = s.audio?.getAudioClock();
-  const p = m.pacing;
-  const b = m.playbackBuffer;
-
-  if ($('dbg-buf-target-cur'))
-    $('dbg-buf-target-cur').textContent = `${b?.targetMs || 1000} / ${b?.currentMs || 0} ms`;
-  if ($('dbg-buf-min-max'))
-    $('dbg-buf-min-max').textContent = `${b?.min10s || 0} / ${b?.max10s || 0} ms`;
-  if ($('dbg-buf-state')) $('dbg-buf-state').textContent = `${b?.state || 'BUILDING'}`;
+  const n = m.network || {};
+  const d = m.decoder || {};
+  const pr = m.presentation || {};
+  const rf = m.raf || {};
+  const mt = m.mainThread || {};
+  const cv = m.canvas || {};
+  const st = m.pacing?.stutter || {};
 
   const statusBadge = $('dbg-stream-status');
   if (statusBadge) {
-    if (b?.state === 'LOW') {
+    if (m.playbackBuffer?.state === 'LOW') {
       statusBadge.textContent = 'Buffer baixo (ajustando)';
-      statusBadge.style.background = 'rgba(234, 179, 8, 0.2)';
-      statusBadge.style.color = '#facc15';
-    } else if (b?.state === 'RECOVERING') {
+      statusBadge.className = 'badge badge-warning';
+    } else if (m.playbackBuffer?.state === 'RECOVERING') {
       statusBadge.textContent = 'Adaptando buffer contra jitter';
-      statusBadge.style.background = 'rgba(234, 179, 8, 0.2)';
-      statusBadge.style.color = '#facc15';
+      statusBadge.className = 'badge badge-warning';
     } else {
       statusBadge.textContent = 'Transmissão estável';
-      statusBadge.style.background = 'rgba(34, 197, 94, 0.2)';
-      statusBadge.style.color = '#4ade80';
+      statusBadge.className = 'badge badge-stable';
     }
   }
 
-  $('dbg-fps-rec').textContent = `${m.receiveFps}`;
-  $('dbg-fps-dec').textContent = `${m.decodeFps}`;
-  $('dbg-fps-ren').textContent = `${m.renderFps}`;
+  // 1. Rede
+  if ($('dbg-net-pkts'))
+    $('dbg-net-pkts').textContent = `${n.receiveFps ?? 0} fps · Áudio: ${a?.active ? 'Ativo' : 'Inativo'}`;
+  if ($('dbg-net-p50-p95-p99'))
+    $('dbg-net-p50-p95-p99').textContent = `${n.p50 ?? 0} / ${n.p95 ?? 0} / ${n.p99 ?? 0} ms`;
+  if ($('dbg-net-max-gap'))
+    $('dbg-net-max-gap').textContent = `${n.maxGap ?? 0} ms (Jitter: ${n.jitter ?? 0}ms)`;
+  if ($('dbg-net-transport')) $('dbg-net-transport').textContent = n.transport || 'WebSocket (Relay)';
 
-  if ($('dbg-pace-rec'))
-    $('dbg-pace-rec').textContent =
-      `${p?.receiveInterval?.p95 || 0} ms (méd: ${p?.receiveInterval?.avg || 0}ms)`;
-  if ($('dbg-pace-ren'))
-    $('dbg-pace-ren').textContent =
-      `${p?.renderInterval?.p95 || 0} / ${p?.renderInterval?.max || 0} ms`;
-  if ($('dbg-stutters'))
-    $('dbg-stutters').textContent =
-      `${p?.stutter?.windowCandidateStutters || 0} / ${p?.stutter?.windowSevereStutters || 0}`;
-  if ($('dbg-stutter-last')) {
-    const snap = p?.stutter?.latestSnapshot;
-    $('dbg-stutter-last').textContent = snap
-      ? `${snap.renderGapMs}ms (cap: ${snap.captureGapMs ?? '?'}ms, rec: ${snap.receiveGapMs ?? '?'}ms${snap.isKeyframe ? ', KEY' : ''})`
-      : 'Nenhum';
+  // 2. Decodificador
+  if ($('dbg-dec-chunks'))
+    $('dbg-dec-chunks').textContent = `${d.chunksSubmittedSec ?? 0}/s · Fila HW: ${d.decodeQueueSize ?? 0}`;
+  if ($('dbg-dec-fps')) $('dbg-dec-fps').textContent = `${d.decodeFps ?? 0} fps`;
+  if ($('dbg-dec-p50-p95-p99'))
+    $('dbg-dec-p50-p95-p99').textContent = `${d.p50 ?? 0} / ${d.p95 ?? 0} / ${d.p99 ?? 0} ms`;
+  if ($('dbg-dec-max-gap')) $('dbg-dec-max-gap').textContent = `${d.maxGap ?? 0} ms`;
+  if ($('dbg-dec-reconfig-err'))
+    $('dbg-dec-reconfig-err').textContent = `${d.reconfigures ?? 0} reconfigs · ${d.errors ?? 0} erros`;
+
+  // 3. Apresentação & Scheduler
+  if ($('dbg-pres-q')) $('dbg-pres-q').textContent = String(pr.queuedFrames ?? 0);
+  if ($('dbg-pres-fps')) $('dbg-pres-fps').textContent = `${pr.renderFps ?? 0} fps`;
+  if ($('dbg-pres-p50-p95-p99'))
+    $('dbg-pres-p50-p95-p99').textContent = `${pr.p50 ?? 0} / ${pr.p95 ?? 0} / ${pr.p99 ?? 0} ms`;
+  if ($('dbg-pres-max-gap')) $('dbg-pres-max-gap').textContent = `${pr.maxGap ?? 0} ms`;
+  if ($('dbg-pres-drops'))
+    $('dbg-pres-drops').textContent = `${pr.droppedLate ?? 0} atraso · ${pr.droppedRecovery ?? 0} rec (Total: ${pr.droppedTotal ?? 0})`;
+  if ($('dbg-pres-drift-lat'))
+    $('dbg-pres-drift-lat').textContent = `Drift: ${pr.avDriftMs ?? 0}ms · E2E: ${m.streamLatency?.estimatedEndToEndMs ?? 0}ms`;
+  if ($('dbg-pres-resync'))
+    $('dbg-pres-resync').textContent = `Hard: ${pr.hardResyncCount ?? 0} · Soft: ${pr.softCorrectionCount ?? 0}`;
+
+  // 4. rAF & Contexto
+  if ($('dbg-raf-fps')) $('dbg-raf-fps').textContent = `${rf.rafFps ?? 0} Hz`;
+  if ($('dbg-raf-p50-p95-p99'))
+    $('dbg-raf-p50-p95-p99').textContent = `${rf.p50 ?? 0} / ${rf.p95 ?? 0} / ${rf.p99 ?? 0} ms`;
+  if ($('dbg-raf-max-gap')) $('dbg-raf-max-gap').textContent = `${rf.maxGap ?? 0} ms`;
+  if ($('dbg-raf-context'))
+    $('dbg-raf-context').textContent = `${rf.visibilityState || 'visible'} · ${rf.hasFocus ? 'focused' : 'unfocused'}`;
+
+  // 5. Main Thread & Canvas
+  if ($('dbg-mt-tasks10s'))
+    $('dbg-mt-tasks10s').textContent = `${mt.longTasks10s ?? 0} (Max: ${mt.longestTaskMs ?? 0}ms · Total: ${mt.totalLongTaskDurationMs ?? 0}ms)`;
+  if ($('dbg-canvas-draw'))
+    $('dbg-canvas-draw').textContent = `${cv.drawAvgMs ?? 0} / ${cv.drawP95Ms ?? 0} / ${cv.drawMaxMs ?? 0} ms`;
+  if ($('dbg-canvas-res')) $('dbg-canvas-res').textContent = `${cv.backingRes || '—'} (CSS: ${cv.cssRes || '—'})`;
+  if ($('dbg-canvas-dpr-vp')) $('dbg-canvas-dpr-vp').textContent = `DPR ${cv.dpr || 1} · VP ${cv.viewport || '—'}`;
+
+  // 6. Stutter Classifier
+  if ($('dbg-stutter-counts')) {
+    const c = st.caseCounts || { A: 0, B: 0, C: 0, D: 0, E: 0 };
+    $('dbg-stutter-counts').innerHTML = `<span class="badge-case-a">A:${c.A}</span> <span class="badge-case-b">B:${c.B}</span> <span class="badge-case-c">C:${c.C}</span> <span class="badge-case-d">D:${c.D}</span> <span class="badge-case-e">E:${c.E}</span>`;
   }
 
-  if ($('dbg-clock-source'))
-    $('dbg-clock-source').textContent = m.clockSource || (a?.active ? 'AUDIO' : 'VIDEO');
-  if ($('dbg-buf-aud'))
-    $('dbg-buf-aud').textContent = a?.active ? `${Math.round(a.bufferAheadMs)} ms` : '0 ms';
-  if ($('dbg-underruns-aud')) $('dbg-underruns-aud').textContent = String(a?.underrunCount ?? 0);
-  if ($('dbg-av-drift')) $('dbg-av-drift').textContent = a?.active ? `${m.avDriftMs} ms` : 'N/A';
+  if ($('dbg-stutter-latest')) {
+    const hist = m.stutterEvents || [];
+    if (hist.length === 0) {
+      $('dbg-stutter-latest').textContent = 'Nenhum engasgo detectado na sessão.';
+    } else {
+      const snap = hist[0];
+      const caseLabel = snap.primarySuspect ? `[${snap.primarySuspect.code}] ${snap.primarySuspect.name}` : 'Desconhecido';
+      $('dbg-stutter-latest').innerHTML = `<b>${caseLabel}</b><br>RenderGap: ${snap.renderGapMs}ms · rAFGap: ${snap.rafGapMs ?? '?'}ms<br>DecGap: ${snap.decodeGapMs ?? '?'}ms · RecGap: ${snap.receiveGapMs ?? '?'}ms<br>LongTask: ${snap.longestLongTaskMs ?? 0}ms · Fila: ${snap.presentationQueueSize}`;
+    }
+  }
+}
 
-  if ($('dbg-lat-e2e'))
-    $('dbg-lat-e2e').textContent =
-      `${m.streamLatency?.estimatedEndToEndMs ?? Math.round(m.videoLagMs + (b?.currentMs || 0))} ms`;
-  if ($('dbg-q-presentation'))
-    $('dbg-q-presentation').textContent = String(
-      m.video?.queuedFrames ?? m.presentationQueueSize ?? 0,
-    );
-  if ($('dbg-dropped'))
-    $('dbg-dropped').textContent =
-      `${m.video?.droppedLate ?? m.droppedLate ?? 0} atraso / ${m.video?.droppedRecovery ?? m.droppedRecovery ?? 0} rec`;
+function copyStutterLog() {
+  const s = activeSlot !== null ? streams.get(activeSlot) : [...streams.values()][0];
+  if (!s || !s.player) {
+    alert('Nenhum stream ativo para exportar diagnóstico.');
+    return;
+  }
+  const m = s.player.getMetrics();
+  const jsonReport = JSON.stringify(m, null, 2);
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(jsonReport).then(() => {
+      alert('Relatório completo de diagnóstico copiado para a área de transferência!');
+    }).catch(() => {
+      prompt('Copie o relatório JSON abaixo:', jsonReport);
+    });
+  } else {
+    prompt('Copie o relatório JSON abaixo:', jsonReport);
+  }
+}
 
-  $('dbg-res-native').textContent = m.sizes?.video || '—';
-  $('dbg-res-css').textContent = m.sizes?.box || '—';
-  $('dbg-mode-lat').textContent = `${currentLatencyMode.toUpperCase()} / ${currentFitMode}`;
+if (typeof window !== 'undefined') {
+  window.copyStutterLog = copyStutterLog;
 }
 
 // ------------------------------------------------------------------- helpers
@@ -2660,6 +2707,7 @@ $('latencySelect')?.addEventListener('change', (e) => applyLatencyMode(e.target.
 
 // Alternar Debug Overlay HUD
 $('statsToggle')?.addEventListener('click', toggleDebugOverlay);
+  $('btnCopyDiagnostics')?.addEventListener('click', copyStutterLog);
 $('debugClose')?.addEventListener('click', toggleDebugOverlay);
 
 // Tela cheia com fallback gracioso para maximização no iframe da Activity
