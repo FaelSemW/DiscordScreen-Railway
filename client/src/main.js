@@ -157,175 +157,98 @@ function updateDebugOverlay() {
 
   const s = activeSlot !== null ? streams.get(activeSlot) : [...streams.values()][0];
   if (!s || !s.player) {
-    if ($('dbg-net-pkts')) $('dbg-net-pkts').textContent = '0 / 0 fps';
-    if ($('dbg-net-p50-p95-p99')) $('dbg-net-p50-p95-p99').textContent = '0 / 0 / 0 ms';
-    if ($('dbg-net-max-gap')) $('dbg-net-max-gap').textContent = '0 ms';
-    if ($('dbg-dec-chunks')) $('dbg-dec-chunks').textContent = '0/s · Q: 0';
-    if ($('dbg-dec-fps')) $('dbg-dec-fps').textContent = '0 fps';
-    if ($('dbg-dec-p50-p95-p99')) $('dbg-dec-p50-p95-p99').textContent = '0 / 0 / 0 ms';
-    if ($('dbg-dec-max-gap')) $('dbg-dec-max-gap').textContent = '0 ms';
-    if ($('dbg-dec-reconfig-err')) $('dbg-dec-reconfig-err').textContent = '0 / 0';
-    if ($('dbg-pres-q')) $('dbg-pres-q').textContent = '0';
-    if ($('dbg-pres-fps')) $('dbg-pres-fps').textContent = '0 fps';
-    if ($('dbg-pres-p50-p95-p99')) $('dbg-pres-p50-p95-p99').textContent = '0 / 0 / 0 ms';
-    if ($('dbg-pres-max-gap')) $('dbg-pres-max-gap').textContent = '0 ms';
-    if ($('dbg-pres-drops')) $('dbg-pres-drops').textContent = '0 / 0';
-    if ($('dbg-pres-drift-lat')) $('dbg-pres-drift-lat').textContent = '0 ms / 0 ms';
-    if ($('dbg-pres-resync')) $('dbg-pres-resync').textContent = '0 / 0';
-    if ($('dbg-raf-fps')) $('dbg-raf-fps').textContent = '0 Hz';
-    if ($('dbg-raf-p50-p95-p99')) $('dbg-raf-p50-p95-p99').textContent = '0 / 0 / 0 ms';
-    if ($('dbg-raf-max-gap')) $('dbg-raf-max-gap').textContent = '0 ms';
-    if ($('dbg-raf-context')) $('dbg-raf-context').textContent = 'visible · focused';
-    if ($('dbg-mt-tasks10s')) $('dbg-mt-tasks10s').textContent = '0 (Max: 0ms)';
-    if ($('dbg-canvas-draw')) $('dbg-canvas-draw').textContent = '0.0 / 0.0 / 0.0 ms';
-    if ($('dbg-canvas-res')) $('dbg-canvas-res').textContent = '— / —';
-    if ($('dbg-canvas-dpr-vp')) $('dbg-canvas-dpr-vp').textContent = '1.0 / —';
-    if ($('dbg-stutter-counts')) $('dbg-stutter-counts').textContent = 'A:0 B:0 C:0 D:0 E:0';
-    if ($('dbg-stutter-latest')) $('dbg-stutter-latest').textContent = 'Aguardando fluxo...';
+    if ($('dbg-buf-target-cur')) $('dbg-buf-target-cur').textContent = '1000 / 0 ms';
+    if ($('dbg-buf-min-max')) $('dbg-buf-min-max').textContent = '0 / 0 ms';
+    if ($('dbg-buf-state')) $('dbg-buf-state').textContent = 'BUILDING';
+    $('dbg-fps-rec').textContent = '0';
+    $('dbg-fps-dec').textContent = '0';
+    $('dbg-fps-ren').textContent = '0';
+    if ($('dbg-pace-rec')) $('dbg-pace-rec').textContent = '0 ms';
+    if ($('dbg-pace-ren')) $('dbg-pace-ren').textContent = '0 / 0 ms';
+    if ($('dbg-stutters')) $('dbg-stutters').textContent = '0 / 0';
+    if ($('dbg-stutter-last')) $('dbg-stutter-last').textContent = '—';
+    if ($('dbg-clock-source')) $('dbg-clock-source').textContent = '—';
+    if ($('dbg-buf-aud')) $('dbg-buf-aud').textContent = '0 ms';
+    if ($('dbg-underruns-aud')) $('dbg-underruns-aud').textContent = '0';
+    if ($('dbg-av-drift')) $('dbg-av-drift').textContent = '—';
+    if ($('dbg-lat-e2e')) $('dbg-lat-e2e').textContent = '0 ms';
+    if ($('dbg-q-presentation')) $('dbg-q-presentation').textContent = '0';
+    if ($('dbg-dropped')) $('dbg-dropped').textContent = '0 / 0';
+    $('dbg-res-native').textContent = '—';
+    $('dbg-res-css').textContent = '—';
+    $('dbg-mode-lat').textContent = `${currentLatencyMode.toUpperCase()} / ${currentFitMode}`;
     return;
   }
 
   const m = s.player.getMetrics();
   const a = s.audio?.getAudioClock();
-  const n = m.network || {};
-  const d = m.decoder || {};
-  const pr = m.presentation || {};
-  const rf = m.raf || {};
-  const mt = m.mainThread || {};
-  const cv = m.canvas || {};
-  const st = m.pacing?.stutter || {};
+  const p = m.pacing;
+  const b = m.playbackBuffer;
+
+  if ($('dbg-buf-target-cur'))
+    $('dbg-buf-target-cur').textContent = `${b?.targetMs || 1000} / ${b?.currentMs || 0} ms`;
+  if ($('dbg-buf-min-max'))
+    $('dbg-buf-min-max').textContent = `${b?.min10s || 0} / ${b?.max10s || 0} ms`;
+  if ($('dbg-buf-state')) $('dbg-buf-state').textContent = `${b?.state || 'BUILDING'}`;
 
   const statusBadge = $('dbg-stream-status');
   if (statusBadge) {
-    if (m.playbackBuffer?.state === 'LOW') {
+    if (b?.state === 'LOW') {
       statusBadge.textContent = 'Buffer baixo (ajustando)';
-      statusBadge.className = 'badge badge-warning';
-    } else if (m.playbackBuffer?.state === 'RECOVERING') {
+      statusBadge.style.background = 'rgba(234, 179, 8, 0.2)';
+      statusBadge.style.color = '#facc15';
+    } else if (b?.state === 'RECOVERING') {
       statusBadge.textContent = 'Adaptando buffer contra jitter';
-      statusBadge.className = 'badge badge-warning';
+      statusBadge.style.background = 'rgba(234, 179, 8, 0.2)';
+      statusBadge.style.color = '#facc15';
     } else {
       statusBadge.textContent = 'Transmissão estável';
-      statusBadge.className = 'badge badge-stable';
+      statusBadge.style.background = 'rgba(34, 197, 94, 0.2)';
+      statusBadge.style.color = '#4ade80';
     }
   }
 
-  // 1. Rede
-  if ($('dbg-net-pkts'))
-    $('dbg-net-pkts').textContent = `${n.receiveFps ?? 0} fps · Áudio: ${a?.active ? 'Ativo' : 'Inativo'}`;
-  if ($('dbg-net-p50-p95-p99'))
-    $('dbg-net-p50-p95-p99').textContent = `${n.p50 ?? 0} / ${n.p95 ?? 0} / ${n.p99 ?? 0} ms`;
-  if ($('dbg-net-max-gap'))
-    $('dbg-net-max-gap').textContent = `${n.maxGap ?? 0} ms (Jitter: ${n.jitter ?? 0}ms)`;
-  if ($('dbg-net-transport')) $('dbg-net-transport').textContent = n.transport || 'WebSocket (Relay)';
+  $('dbg-fps-rec').textContent = `${m.receiveFps}`;
+  $('dbg-fps-dec').textContent = `${m.decodeFps}`;
+  $('dbg-fps-ren').textContent = `${m.renderFps}`;
 
-  // 2. Decodificador
-  if ($('dbg-dec-chunks'))
-    $('dbg-dec-chunks').textContent = `${d.chunksSubmittedSec ?? 0}/s · Fila HW: ${d.decodeQueueSize ?? 0}`;
-  if ($('dbg-dec-fps')) $('dbg-dec-fps').textContent = `${d.decodeFps ?? 0} fps`;
-  if ($('dbg-dec-p50-p95-p99'))
-    $('dbg-dec-p50-p95-p99').textContent = `${d.p50 ?? 0} / ${d.p95 ?? 0} / ${d.p99 ?? 0} ms`;
-  if ($('dbg-dec-max-gap')) $('dbg-dec-max-gap').textContent = `${d.maxGap ?? 0} ms`;
-  if ($('dbg-dec-reconfig-err'))
-    $('dbg-dec-reconfig-err').textContent = `${d.reconfigures ?? 0} reconfigs · ${d.errors ?? 0} erros`;
-
-  // 3. Apresentação & Scheduler
-  if ($('dbg-pres-q')) $('dbg-pres-q').textContent = String(pr.queuedFrames ?? 0);
-  if ($('dbg-pres-fps')) $('dbg-pres-fps').textContent = `${pr.renderFps ?? 0} fps`;
-  if ($('dbg-pres-p50-p95-p99'))
-    $('dbg-pres-p50-p95-p99').textContent = `${pr.p50 ?? 0} / ${pr.p95 ?? 0} / ${pr.p99 ?? 0} ms`;
-  if ($('dbg-pres-max-gap')) $('dbg-pres-max-gap').textContent = `${pr.maxGap ?? 0} ms`;
-  if ($('dbg-pres-drops'))
-    $('dbg-pres-drops').textContent = `${pr.droppedLate ?? 0} atraso · ${pr.droppedRecovery ?? 0} rec (Total: ${pr.droppedTotal ?? 0})`;
-  if ($('dbg-pres-drift-lat'))
-    $('dbg-pres-drift-lat').textContent = `Drift: ${pr.avDriftMs ?? 0}ms · E2E: ${m.streamLatency?.estimatedEndToEndMs ?? 0}ms`;
-  if ($('dbg-pres-resync'))
-    $('dbg-pres-resync').textContent = `Hard: ${pr.hardResyncCount ?? 0} · Soft: ${pr.softCorrectionCount ?? 0}`;
-
-  // 4. rAF & Contexto
-  if ($('dbg-raf-fps')) $('dbg-raf-fps').textContent = `${rf.rafFps ?? 0} Hz`;
-  if ($('dbg-raf-p50-p95-p99'))
-    $('dbg-raf-p50-p95-p99').textContent = `${rf.p50 ?? 0} / ${rf.p95 ?? 0} / ${rf.p99 ?? 0} ms`;
-  if ($('dbg-raf-max-gap')) $('dbg-raf-max-gap').textContent = `${rf.maxGap ?? 0} ms`;
-  if ($('dbg-raf-context'))
-    $('dbg-raf-context').textContent = `${rf.visibilityState || 'visible'} · ${rf.hasFocus ? 'focused' : 'unfocused'}`;
-
-  // 5. Main Thread & Canvas
-  if ($('dbg-mt-tasks10s'))
-    $('dbg-mt-tasks10s').textContent = `${mt.longTasks10s ?? 0} (Max: ${mt.longestTaskMs ?? 0}ms · Total: ${mt.totalLongTaskDurationMs ?? 0}ms)`;
-  if ($('dbg-canvas-draw'))
-    $('dbg-canvas-draw').textContent = `${cv.drawAvgMs ?? 0} / ${cv.drawP95Ms ?? 0} / ${cv.drawMaxMs ?? 0} ms`;
-  if ($('dbg-canvas-res')) $('dbg-canvas-res').textContent = `${cv.backingRes || '—'} (CSS: ${cv.cssRes || '—'})`;
-  if ($('dbg-canvas-dpr-vp')) $('dbg-canvas-dpr-vp').textContent = `DPR ${cv.dpr || 1} · VP ${cv.viewport || '—'}`;
-
-  // 6. Stutter Classifier
-  if ($('dbg-stutter-counts')) {
-    const c = st.caseCounts || { A: 0, B: 0, C: 0, D: 0, E: 0 };
-    $('dbg-stutter-counts').innerHTML = `<span class="badge-case-a">A:${c.A}</span> <span class="badge-case-b">B:${c.B}</span> <span class="badge-case-c">C:${c.C}</span> <span class="badge-case-d">D:${c.D}</span> <span class="badge-case-e">E:${c.E}</span>`;
+  if ($('dbg-pace-rec'))
+    $('dbg-pace-rec').textContent =
+      `${p?.receiveInterval?.p95 || 0} ms (méd: ${p?.receiveInterval?.avg || 0}ms)`;
+  if ($('dbg-pace-ren'))
+    $('dbg-pace-ren').textContent =
+      `${p?.renderInterval?.p95 || 0} / ${p?.renderInterval?.max || 0} ms`;
+  if ($('dbg-stutters'))
+    $('dbg-stutters').textContent =
+      `${p?.stutter?.windowCandidateStutters || 0} / ${p?.stutter?.windowSevereStutters || 0}`;
+  if ($('dbg-stutter-last')) {
+    const snap = p?.stutter?.latestSnapshot;
+    $('dbg-stutter-last').textContent = snap
+      ? `${snap.renderGapMs}ms (cap: ${snap.captureGapMs ?? '?'}ms, rec: ${snap.receiveGapMs ?? '?'}ms${snap.isKeyframe ? ', KEY' : ''})`
+      : 'Nenhum';
   }
 
-  if ($('dbg-stutter-latest')) {
-    const hist = m.stutterEvents || [];
-    if (hist.length === 0) {
-      $('dbg-stutter-latest').textContent = 'Nenhum engasgo detectado na sessão.';
-    } else {
-      const snap = hist[0];
-      const caseLabel = snap.primarySuspect ? `[${snap.primarySuspect.code}] ${snap.primarySuspect.name}` : 'Desconhecido';
-      $('dbg-stutter-latest').innerHTML = `<b>${caseLabel}</b><br>RenderGap: ${snap.renderGapMs}ms · rAFGap: ${snap.rafGapMs ?? '?'}ms<br>DecGap: ${snap.decodeGapMs ?? '?'}ms · RecGap: ${snap.receiveGapMs ?? '?'}ms<br>LongTask: ${snap.longestLongTaskMs ?? 0}ms · Fila: ${snap.presentationQueueSize}`;
-    }
-  }
-}
+  if ($('dbg-clock-source'))
+    $('dbg-clock-source').textContent = m.clockSource || (a?.active ? 'AUDIO' : 'VIDEO');
+  if ($('dbg-buf-aud'))
+    $('dbg-buf-aud').textContent = a?.active ? `${Math.round(a.bufferAheadMs)} ms` : '0 ms';
+  if ($('dbg-underruns-aud')) $('dbg-underruns-aud').textContent = String(a?.underrunCount ?? 0);
+  if ($('dbg-av-drift')) $('dbg-av-drift').textContent = a?.active ? `${m.avDriftMs} ms` : 'N/A';
 
-function getStutterLog() {
-  const s = activeSlot !== null ? streams.get(activeSlot) : [...streams.values()][0];
-  const m = s?.player ? s.player.getMetrics() : null;
-  const a = s?.audio?.getAudioClock() ?? null;
+  if ($('dbg-lat-e2e'))
+    $('dbg-lat-e2e').textContent =
+      `${m.streamLatency?.estimatedEndToEndMs ?? Math.round(m.videoLagMs + (b?.currentMs || 0))} ms`;
+  if ($('dbg-q-presentation'))
+    $('dbg-q-presentation').textContent = String(
+      m.video?.queuedFrames ?? m.presentationQueueSize ?? 0,
+    );
+  if ($('dbg-dropped'))
+    $('dbg-dropped').textContent =
+      `${m.video?.droppedLate ?? m.droppedLate ?? 0} atraso / ${m.video?.droppedRecovery ?? m.droppedRecovery ?? 0} rec`;
 
-  return {
-    capturedAt: new Date().toISOString(),
-    inDiscord,
-    userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'headless',
-    devicePixelRatio: typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1,
-    viewport: typeof window !== 'undefined' ? `${window.innerWidth}×${window.innerHeight}` : '1920×1080',
-    activeSlot,
-    availableSlots: [...available.keys()],
-    streamActive: Boolean(s && s.player),
-    metrics: m,
-    audioClock: a
-      ? {
-          active: a.active,
-          bufferAheadMs: Math.round(a.bufferAheadMs),
-          underrunCount: a.underrunCount,
-        }
-      : null,
-    recentStutterEvents: m?.stutterEvents || [],
-  };
-}
-
-function copyStutterLog() {
-  const log = getStutterLog();
-  const text = JSON.stringify(log, null, 2);
-
-  if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(text).then(() => {
-      toast('Relatório de diagnóstico copiado para a área de transferência!');
-    }).catch(() => {
-      if (typeof prompt !== 'undefined') {
-        prompt('Copie o relatório JSON abaixo:', text);
-      } else {
-        console.log('[DIAGNOSTIC_REPORT_JSON]', text);
-      }
-    });
-  } else if (typeof prompt !== 'undefined') {
-    prompt('Copie o relatório JSON abaixo:', text);
-  } else {
-    console.log('[DIAGNOSTIC_REPORT_JSON]', text);
-  }
-  return log;
-}
-
-if (typeof window !== 'undefined') {
-  window.getStutterLog = getStutterLog;
-  window.copyStutterLog = copyStutterLog;
+  $('dbg-res-native').textContent = m.sizes?.video || '—';
+  $('dbg-res-css').textContent = m.sizes?.box || '—';
+  $('dbg-mode-lat').textContent = `${currentLatencyMode.toUpperCase()} / ${currentFitMode}`;
 }
 
 // ------------------------------------------------------------------- helpers
@@ -1485,6 +1408,1299 @@ window.addEventListener('keydown', (e) => {
     copyStutterLog();
     return;
   }
+  if (!e.ctrlKey || !e.shiftKey || e.code !== 'KeyD') return;
+  e.preventDefault();
+  const painel = $('panel');
+  painel.hidden = !painel.hidden;
+  if (!painel.hidden) ensureStatsTimer();
+});
+
+// ------------------------------------------------------------------- arranque
+
+boot().catch((err) => {
+  console.error(err);
+  setEmpty('Não foi possível entrar', err.message);
+});
+
+async function boot() {
+  // O painel inicial é estático. Sem este vigia, qualquer espera que não
+  // termine fica com a cara de "Conectando…" para sempre, sem dizer o que
+  // está faltando — que foi exatamente como este arranque ja travou.
+  const vigia = setTimeout(() => {
+    setEmpty('Está demorando…', 'Sem resposta do servidor. Ele está no ar?');
+  }, 8000);
+
+  // Buscada em paralelo, nunca antes: ela traz o diagnóstico de versão e o
+  // client id de reserva, e nenhum dos dois vale segurar o login.
+  const config = loadConfig();
+
+  // Sem login o lobby ainda abre: dá para ver as salas antes de entrar. Só
+  // criar e entrar é que pedem identidade.
+  session = inDiscord ? await authDiscord(config) : await authWeb();
+
+  clientId = params.get('client_id') || (await config).clientId || null;
+  checkVersion((await config).asset);
+  clearTimeout(vigia);
+
+  renderProfileButton();
+
+  // Dentro do Discord não existe lobby: a atividade já É a sala daquela call, e
+  // oferecer uma lista de salas ali seria oferecer uma escolha entre uma opção.
+  // No site é o contrário — não há call nenhuma para herdar, então a lista de
+  // salas é a única forma de as pessoas se encontrarem.
+  if (inDiscord) return entrarNaCall();
+
+  // Lido antes de showLobby, que limpa o parâmetro da URL ao voltar ao lobby.
+  const alvo = new URLSearchParams(location.search).get('sala');
+  // Do ?t= não: ele é lido do params do arranque, capturado antes de tudo.
+  const ingresso = params.get('t');
+
+  await showLobby();
+  if (ingresso) return abrirPeloIngresso(ingresso);
+  if (session && alvo) await joinById(alvo);
+}
+
+/**
+ * Entra direto na sala de um link recebido da atividade.
+ *
+ * Não passa pelo lobby nem pela senha: a sala da call não aparece na lista e
+ * recusaria o join de fora do canal de voz. O ingresso é a prova de que essa
+ * porta já se abriu, e o servidor reemite os tokens a partir dele.
+ */
+async function abrirPeloIngresso(ingresso) {
+  setEmpty('Entrando…', 'Sala da call');
+
+  // Guardado antes de conectar: o primeiro render pode chegar antes daqui de
+  // baixo terminar, e sem a intenção pronta ele escolheria outra tela.
+  // O ingresso, sozinho, já diz o que a pessoa veio fazer: assistir. O slot
+  // refina qual tela, e a tela cheia é o padrão de quem veio da atividade —
+  // links antigos, sem esses dois, continuam valendo.
+  const pedido = params.get('slot');
+  const numero = Number(pedido);
+  chegada = {
+    slot: pedido !== null && Number.isInteger(numero) ? numero : null,
+    cheia: params.get('cheia') !== '0',
+  };
+  console.info('[sala] chegou pelo link da atividade', chegada);
+
+  try {
+    const { name, ...tokens } = await post(`${P}/api/rooms/open`, { token: ingresso });
+    openRoom(tokens, { id: tokens.roomId, name });
+
+    // openRoom já trocou a URL para ?sala=<id>; o ingresso sai junto, para não
+    // ficar no histórico nem em link copiado da barra de endereço.
+    const url = new URL(location.href);
+    for (const chave of ['t', 'slot', 'cheia']) url.searchParams.delete(chave);
+    history.replaceState(null, '', url);
+  } catch (err) {
+    setEmpty('Não foi possível abrir', err.message);
+  }
+}
+
+/** Abre a sala desta call, criando-a na primeira pessoa que chega. */
+async function entrarNaCall() {
+  setEmpty('Entrando…', 'Sala desta call');
+  try {
+    // A sessão costuma trazer a sala junto — ver a nota no /api/session. A ida
+    // ao /api/rooms/call fica para quem chegou aqui sem ela: identidade
+    // reaproveitada de uma visita anterior, ou servidor mais antigo.
+    const tokens =
+      session?.sala ?? (await post(`${P}/api/rooms/call`, { identity: session.identity }));
+    openRoom(tokens, { id: tokens.roomId, name: 'Sala da call' });
+  } catch (err) {
+    setEmpty('Não foi possível entrar', err.message);
+  }
+}
+
+// ---------------------------------------------------------------- login web
+
+$('loginBtn').addEventListener('click', () => {
+  // Sobe de convidado para conta do Discord: a identidade nova substitui a
+  // antiga, então as salas criadas como convidado ficam sem dono.
+  remove('identity');
+  location.href = '/auth/login';
+});
+
+/**
+ * Identidade fora do Discord.
+ *
+ * O callback do OAuth devolve o token no fragmento da URL — que não é enviado
+ * ao servidor nem entra em log de proxy. Lemos, guardamos e limpamos a barra
+ * de endereço para o token não ficar visível nem no histórico.
+ */
+async function authWeb() {
+  const fragment = new URLSearchParams(location.hash.slice(1));
+  const fromLogin = fragment.get('identity');
+
+  if (fromLogin) {
+    store('identity', fromLogin);
+    history.replaceState(null, '', location.pathname + location.search);
+  }
+
+  let identity = fromLogin ?? read('identity');
+
+  // Sem identidade nenhuma: entra como convidado. O login do Discord é uma
+  // melhoria opcional, não um pedágio para assistir uma tela.
+  if (!identity) {
+    const guest = await post('/api/session-guest', { name: storedName() }, { retry: false });
+    store('identity', guest.identity);
+    identity = guest.identity;
+  }
+
+  const payload = decodeIdentity(identity);
+  if (!payload) {
+    remove('identity');
+    return null;
+  }
+
+  return {
+    identity,
+    isGuest: String(payload.uid).startsWith('guest-'),
+    call: payload.call ?? null,
+    user: { id: payload.uid, name: payload.name, avatar: payload.av ?? null },
+  };
+}
+
+function decodeIdentity(token) {
+  try {
+    const p = JSON.parse(atob(token.split('.')[0].replace(/-/g, '+').replace(/_/g, '/')));
+    // O servidor revalida a assinatura; aqui só descartamos o que já venceu,
+    // para não tentar usar um token morto e cair num erro sem explicação.
+    if (p.exp && p.exp * 1000 < Date.now()) return null;
+    return p;
+  } catch {
+    return null;
+  }
+}
+
+// O armazenamento pode estar bloqueado num iframe de terceiro, então todo
+// acesso é protegido — perder a sessão é melhor do que a página não abrir.
+function read(key) {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function store(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* sessão só em memória */
+  }
+}
+
+function remove(key) {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    /* nada a limpar */
+  }
+}
+
+// -------------------------------------------------------------------- lobby
+
+/** Tokens da sala atual. null = estamos no lobby. */
+let roomTokens = null;
+let roomInfo = null;
+let joinTarget = null;
+let lastRoomState = null;
+let lobbyRooms = [];
+
+function inRoom() {
+  return roomTokens !== null;
+}
+
+// A lista precisa se atualizar sozinha: salas abrem, enchem e fecham enquanto
+// alguém olha o lobby parado.
+const LOBBY_REFRESH_MS = 4000;
+let lobbyTimer = null;
+
+/**
+ * Larga a sala atual por completo.
+ *
+ * Funil único: sair pelo botão, a sala fechar sozinha e o arranque precisam
+ * deixar exatamente o mesmo estado para trás. Parar a transmissão vem primeiro
+ * porque a captura da aba externa só para se o servidor avisar, e depois do
+ * close() não sobra por onde avisar.
+ */
+function limparSala() {
+  stopMyBroadcast();
+
+  closeAllStreams();
+  available.clear();
+  watching.clear();
+  participants = [];
+  lastRoomState = null;
+  activeSlot = null;
+  telaCheia = false;
+
+  if (roomInfo) remove(`sala:${roomInfo.id}`);
+  roomTokens = null;
+  roomInfo = null;
+  setRoomUrl(null);
+
+  ws?.close();
+  ws = null;
+}
+
+async function showLobby() {
+  limparSala();
+
+  $('lobby').hidden = false;
+  $('grid').hidden = true;
+  $('empty').hidden = true;
+  $('roomPill').hidden = true;
+  $('leaveRoom').hidden = true;
+  $('roomSettings').hidden = true;
+  $('share').hidden = true;
+  $('camera').hidden = true;
+
+  // O dock inteiro sai de cena: todo controle dele é de dentro da sala, e o
+  // cabeçalho do lobby já traz perfil e criar sala.
+  $('fullscreen').hidden = true;
+  $('panel').hidden = true;
+
+  // O login só aparece para convidado: quem já entrou pelo Discord não tem o
+  // que melhorar.
+  $('loginBtn').hidden = inDiscord || !session?.isGuest;
+  $('people').hidden = true;
+
+  await loadRooms();
+
+  clearInterval(lobbyTimer);
+  lobbyTimer = setInterval(() => {
+    // Nenhum modal aberto: recarregar sob o cursor tiraria o card do lugar no
+    // meio de um clique.
+    const busy = ['createModal', 'joinModal'].some((id) => !$(id).hidden);
+    if (!busy && !$('lobby').hidden) loadRooms();
+  }, LOBBY_REFRESH_MS);
+}
+
+async function loadRooms() {
+  const list = $('roomList');
+
+  let rooms;
+  try {
+    rooms = (await post(`${P}/api/rooms/list`, { identity: session?.identity })).rooms ?? [];
+  } catch (err) {
+    list.replaceChildren(msgRow(`Não foi possível carregar: ${err.message}`));
+    return;
+  }
+
+  lobbyRooms = rooms;
+
+  const cards = rooms.map(roomCard);
+
+  if (!cards.length) {
+    list.replaceChildren(msgRow('Nenhuma sala aberta. Crie a primeira.'));
+    return;
+  }
+
+  list.replaceChildren(...cards);
+}
+
+function msgRow(text) {
+  const el = document.createElement('div');
+  el.className = 'lobby-empty';
+  el.textContent = text;
+  return el;
+}
+
+function roomCard(room) {
+  const card = document.createElement('button');
+  card.className = 'room-card';
+
+  const top = document.createElement('div');
+  top.className = 'room-card-top';
+
+  if (room.locked) {
+    top.insertAdjacentHTML(
+      'afterbegin',
+      '<svg viewBox="0 0 24 24"><rect x="4" y="11" width="16" height="10" rx="2"/>' +
+        '<path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>',
+    );
+  }
+
+  const name = document.createElement('span');
+  name.className = 'room-card-name';
+  // textContent: nome de sala é escrito por outra pessoa.
+  name.textContent = room.name;
+  top.append(name);
+
+  const meta = document.createElement('span');
+  meta.className = 'room-card-meta';
+  const pessoas = room.people === 1 ? '1 pessoa' : `${room.people} pessoas`;
+  meta.textContent = `${pessoas} · por ${room.owner}`;
+
+  card.append(top, meta);
+
+  if (room.streams > 0) {
+    const live = document.createElement('span');
+    live.className = 'room-card-meta room-live';
+    live.textContent = room.streams === 1 ? '1 tela no ar' : `${room.streams} telas no ar`;
+    card.append(live);
+  }
+
+  card.addEventListener('click', () => enterRoom(room));
+  return card;
+}
+
+async function enterRoom(room, password) {
+  if (!session) return;
+
+  try {
+    const tokens = await post(`${P}/api/rooms/join`, {
+      identity: session.identity,
+      roomId: room.id,
+      password: password ?? '',
+    });
+    openRoom(tokens, room);
+  } catch (err) {
+    // 403 numa sala trancada é o caminho normal: pedir a senha.
+    if (err.status === 403 && !password) return askPassword(room);
+    if (err.status === 403) return askPassword(room, 'Senha incorreta.');
+    if (err.status === 429) return askPassword(room, err.detail);
+    if (err.status === 404) {
+      toast('Essa sala já fechou.', true);
+      remove(`sala:${room.id}`);
+      setRoomUrl(null);
+      loadRooms();
+      return;
+    }
+    toast(err.message, true);
+  }
+}
+
+function askPassword(room, error) {
+  joinTarget = room;
+  $('joinSub').textContent = `"${room.name}" pede uma senha para entrar.`;
+  $('joinError').textContent = error ?? '';
+  $('joinError').hidden = !error;
+  if (!error) $('joinPass').value = '';
+  $('joinModal').hidden = false;
+  $('joinPass').focus();
+}
+
+/**
+ * Entra na sala apontada pela URL.
+ *
+ * Serve para os dois casos: recarregar a página estando numa sala, e abrir um
+ * link `?sala=<id>` que alguém mandou.
+ */
+async function joinById(id) {
+  // Token guardado de uma visita anterior: entra sem pedir a senha de novo.
+  const saved = read(`sala:${id}`);
+  if (saved) {
+    try {
+      const { tokens, name } = JSON.parse(saved);
+      openRoom(tokens, { id, name });
+      return;
+    } catch {
+      remove(`sala:${id}`);
+    }
+  }
+
+  // Link recebido de fora: usa o fluxo normal, que pede a senha quando precisa.
+  // O nome vem da lista já carregada; salas com senha também aparecem nela.
+  const known = lobbyRooms.find((r) => r.id === id);
+  await enterRoom(known ?? { id, name: 'Sala' });
+}
+
+/** Mantém `?sala=` na barra de endereço, preservando os parâmetros do Discord. */
+function setRoomUrl(id) {
+  const url = new URL(location.href);
+  if (id) url.searchParams.set('sala', id);
+  else url.searchParams.delete('sala');
+  history.replaceState(null, '', url);
+}
+
+function openRoom(tokens, room) {
+  roomTokens = tokens;
+  roomInfo = room;
+
+  setRoomUrl(room.id);
+  store(`sala:${room.id}`, JSON.stringify({ tokens, name: room.name }));
+
+  $('lobby').hidden = true;
+  $('empty').hidden = false;
+  $('share').hidden = false;
+  $('camera').hidden = false;
+  $('people').hidden = false;
+  $('loginBtn').hidden = true;
+
+  // Dentro do Discord não há lista para onde voltar nem outra sala com que
+  // confundir esta: quem fecha a atividade é o próprio Discord.
+  $('roomPill').hidden = inDiscord;
+  $('leaveRoom').hidden = inDiscord;
+
+  clearInterval(lobbyTimer);
+  lobbyTimer = null;
+  $('roomPill').textContent = room.name;
+
+  setEmpty('Entrando…', room.name);
+  connect();
+}
+
+// A limpeza toda — inclusive parar de transmitir — vive em showLobby.
+$('leaveRoom').addEventListener('click', () => showLobby());
+
+/** Client id e versão do bundle, decididos pelo servidor. */
+async function loadConfig() {
+  try {
+    const r = await fetch(`${P}/api/config`, {
+      cache: 'no-store',
+      // fetch não expira sozinho. Sem prazo, um pedido que trava segura tudo o
+      // que vem depois — e nada aqui vale prender o arranque.
+      signal: AbortSignal.timeout(6000),
+    });
+    return await r.json();
+  } catch {
+    // Nem o id nem o diagnóstico podem impedir a sala de abrir.
+    return {};
+  }
+}
+
+/**
+ * Detecta bundle velho e recarrega.
+ *
+ * O index.html vai com no-store, mas o cliente do Discord pode entregar uma
+ * cópia antiga assim mesmo — e o iframe fica preso num build anterior sem
+ * nenhum sinal visível, o que já custou horas de diagnóstico enganoso.
+ *
+ * Comparamos o nome do próprio arquivo (que leva hash de conteúdo) com o que o
+ * servidor diz ser o atual.
+ */
+function checkVersion(asset) {
+  const mine = import.meta.url.split('/').pop().split('?')[0];
+
+  // Em desenvolvimento o Vite serve `main.js` sem hash nenhum, enquanto o
+  // servidor relata o nome do último build. Comparar os dois acusa uma
+  // desatualização que não existe e joga a página num recarregamento eterno.
+  //
+  // A pergunta "isto é um build?" é respondida pelo próprio nome do arquivo, e
+  // não por `import.meta.env.DEV`. O DEV depende de NODE_ENV, que este projeto
+  // define como "development" no .env — e o Vite lê esse arquivo. Resultado: no
+  // build de produção o DEV vinha true, e a função inteira era removida por
+  // codigo morto. Ela existia sem nunca rodar.
+  if (!/^index-[A-Za-z0-9_-]+.js$/.test(mine)) return;
+
+  if (!asset || asset === mine) return;
+
+  // Dentro do Discord a página não se recarrega: o iframe pede a página de novo
+  // à hospedagem, e basta ela devolver X-Frame-Options para o navegador se
+  // recusar a desenhar — vira o retângulo branco. Fechar e reabrir a atividade
+  // faz o Discord montar o iframe do jeito certo, e é o que se pede aqui.
+  //
+  // O aviso continua: detectar a versão velha é o motivo desta função existir,
+  // e é dentro do Discord que ela mais serve, porque o cliente serve bundle
+  // antigo sem nenhum sinal visível.
+  if (inDiscord) {
+    toast('Esta atividade está numa versão antiga. Feche e abra de novo para atualizar.', true);
+    return;
+  }
+
+  // Se recarregar não resolveu, o HTML servido também está velho: avisa em
+  // vez de entrar em laço de reload.
+  if (sessionStorage.getItem('reloadedFor') === asset) {
+    toast('Versão desatualizada e o cache não cede. Recarregue a página.', true);
+    return;
+  }
+  sessionStorage.setItem('reloadedFor', asset);
+  location.reload();
+}
+
+/**
+ * @param {Promise<{clientId?:string}>|string} fonteDoId promessa da config, ou
+ * o id direto quando já se sabe qual é (o caminho da renovação de sessão).
+ */
+async function authDiscord(fonteDoId) {
+  // O Discord injeta client_id na URL do iframe. Preferir essa via tira o login
+  // da dependência de uma ida ao servidor: quando ela demorava, a atividade
+  // ficava parada sem nada para mostrar. A config entra só como reserva.
+  const id =
+    params.get('client_id') ||
+    (typeof fonteDoId === 'string' ? fonteDoId : (await fonteDoId)?.clientId);
+
+  if (!id) {
+    throw new Error('O servidor está sem as credenciais do Discord. Rode: npm run configurar');
+  }
+
+  const clientId = id;
+  sdk = new DiscordSDK(clientId);
+  await sdk.ready();
+
+  const { code } = await sdk.commands.authorize({
+    client_id: clientId,
+    response_type: 'code',
+    state: '',
+    prompt: 'none',
+    // Só precisamos de /users/@me. Menos escopo, menos atrito no consentimento.
+    scope: ['identify'],
+  });
+
+  const { access_token } = await post(`${P}/api/token`, { code, client_id: clientId });
+
+  // Em paralelo, e não em fila: o authenticate avisa o cliente do Discord, o
+  // /api/session consulta o Discord pelo nosso servidor, e nenhum dos dois
+  // depende do resultado do outro. Em série eram duas esperas somadas.
+  //
+  // guild/channel vão junto para o servidor poder confirmar, pelo Discord, que
+  // a pessoa está mesmo naquela call.
+  const [, sessao] = await Promise.all([
+    sdk.commands.authenticate({ access_token }),
+    post(`${P}/api/session`, {
+      access_token,
+      instance_id: sdk.instanceId,
+      guild_id: sdk.guildId,
+      channel_id: sdk.channelId,
+    }),
+  ]);
+
+  return sessao;
+}
+
+/**
+ * Emite uma identidade nova, jogando fora a que o servidor recusou.
+ *
+ * O crachá vive no localStorage e vale até o servidor trocar o segredo que o
+ * assina. Quando isso acontece — reinstalação, mudança de máquina, rotação de
+ * segredo —, todo crachá guardado vira inválido de uma vez. Sem isto o cliente
+ * insistia no mesmo token para sempre e a pessoa ficava presa em "sessão
+ * inválida", sem nada na interface que resolvesse.
+ */
+async function renovarIdentidade() {
+  remove('identity');
+  try {
+    session = inDiscord ? await authDiscord(clientId) : await authWeb();
+    renderProfileButton();
+    return session?.identity ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `retry` existe para a chamada que renova a identidade não cair nela mesma:
+ * um 401 ali significa que renovar não resolve, e insistir viraria laço.
+ */
+async function post(url, body, { retry = true } = {}) {
+  let r;
+  try {
+    r = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      // Um pedido pendurado é pior que um pedido que falha: o que falha diz
+      // alguma coisa, o pendurado só deixa a tela parada.
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (err) {
+    const msg =
+      err.name === 'TimeoutError'
+        ? 'O servidor não respondeu a tempo.'
+        : 'Não foi possível falar com o servidor.';
+    throw Object.assign(new Error(msg), { status: 0 });
+  }
+
+  const data = await r.json().catch(() => ({}));
+
+  if (!r.ok) {
+    // 401 numa chamada que levava identidade quer dizer crachá morto, não falta
+    // de permissão: renova uma vez e repete, em vez de devolver um erro que a
+    // pessoa não tem como resolver.
+    if (r.status === 401 && retry && body?.identity) {
+      const nova = await renovarIdentidade();
+      if (nova) return post(url, { ...body, identity: nova }, { retry: false });
+    }
+
+    // O status carrega significado (403 = senha, 429 = bloqueio, 404 = sala
+    // fechou), então vai junto do erro em vez de virar texto.
+    const err = new Error(data.error ?? `Servidor respondeu ${r.status}.`);
+    err.status = r.status;
+    err.detail = data.error;
+    throw err;
+  }
+  return data;
+}
+
+// ----------------------------------------------------------------- websocket
+
+let wsPingTimer = null;
+
+function connect() {
+  if (!roomTokens) return;
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(
+    `${proto}://${location.host}${P}/ws?t=${encodeURIComponent(roomTokens.viewerToken)}`,
+  );
+  ws.binaryType = 'arraybuffer';
+
+  let abriu = false;
+
+  ws.addEventListener('open', () => {
+    abriu = true;
+    reconnectDelay = 1000;
+    $('grid').hidden = false;
+    setEmpty('Ninguém na sala', 'Aguardando participantes.');
+
+    clearInterval(wsPingTimer);
+    wsPingTimer = setInterval(() => {
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'ping', timestamp: Date.now() }));
+      }
+    }, 20_000);
+
+    // O apelido é do cliente, então precisa ser reenviado a cada conexão —
+    // inclusive nas reconexões, senão o nome volta ao do Discord sozinho.
+    const saved = storedName();
+    if (saved && saved !== session.user.name) {
+      session.user.name = saved;
+      ws.send(JSON.stringify({ type: 'rename', name: saved }));
+    }
+  });
+
+  ws.addEventListener('message', (e) => {
+    // Primeiro byte é o slot, segundo é o tipo: um diz de quem, o outro diz
+    // para qual decodificador — som e imagem dividem o mesmo canal.
+    if (typeof e.data !== 'string') {
+      const view = new DataView(e.data);
+      const s = streams.get(view.getUint8(0));
+      if (!s) return;
+      if (view.getUint8(1) === 3) s.audio?.push(e.data);
+      else s.player.push(e.data);
+      return;
+    }
+
+    let msg;
+    try {
+      msg = JSON.parse(e.data);
+    } catch {
+      return;
+    }
+
+    if (msg.type === 'ping') {
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'pong', timestamp: msg.timestamp || Date.now() }));
+      }
+      return;
+    }
+
+    if (msg.type === 'pong') {
+      return;
+    }
+
+    // Sinalização da conexão direta, repassada por quem transmite.
+    if (msg.type === 'rtc' && Number.isInteger(msg.slot)) {
+      if (msg.payload?.kind === 'offer') receberOferta(msg.slot, msg.payload.sdp);
+      else if (msg.payload?.kind === 'ice') receberIce(msg.slot, msg.payload.candidate);
+      return;
+    }
+
+    if (msg.type === 'state') {
+      participants = msg.participants ?? [];
+      abas.clear();
+      for (const uid of msg.abas ?? []) abas.add(uid);
+
+      lastRoomState = msg.room ?? null;
+
+      // A senha da sala só aparece para quem a criou.
+      $('roomPill').textContent =
+        `${lastRoomState?.locked ? '🔒 ' : ''}${lastRoomState?.name ?? ''}`;
+      $('roomSettings').hidden = lastRoomState?.ownerId !== session?.user?.id;
+      $('roomSettings').classList.toggle('on', Boolean(lastRoomState?.locked));
+
+      // Limpa o que sumiu sem stream-stop (queda abrupta, por exemplo).
+      const live = new Set((msg.streams ?? []).map((s) => s.slot));
+      for (const s of msg.streams ?? []) {
+        const info = available.get(s.slot) ?? { userId: s.userId, config: null };
+        info.watchers = s.watchers ?? [];
+        // Servidor antigo não manda fonte; tela é o que sempre houve.
+        info.fonte = s.fonte ?? 'tela';
+        available.set(s.slot, info);
+      }
+      for (const slot of [...available.keys()]) if (!live.has(slot)) available.delete(slot);
+      for (const slot of [...streams.keys()]) if (!live.has(slot)) closeStream(slot);
+      for (const slot of [...watching]) if (!live.has(slot)) watching.delete(slot);
+      renderGrid();
+      renderBar();
+    } else if (msg.type === 'stream-start') {
+      // Só anuncia; ninguém assiste até pedir.
+      available.set(msg.slot, { userId: msg.userId, fonte: msg.fonte ?? 'tela', config: null });
+      watching.delete(msg.slot);
+      closeStream(msg.slot);
+      renderGrid();
+    } else if (msg.type === 'config') {
+      const info = available.get(msg.slot);
+      if (info) info.config = msg.config;
+      if (watching.has(msg.slot)) {
+        // Config nova no meio da transmissao e so troca de resolucao — a tela
+        // compartilhada foi para tela cheia, por exemplo. Recriar o stream aqui
+        // levava o audio junto (closeStream para o AudioContext e zera
+        // s.audio), e o audio-config so e enviado uma vez por transmissao: o
+        // som nunca voltava. startStream ja reconfigura o decoder de video
+        // sozinho, entao o lugar so precisa existir na primeira vez.
+        if (!streams.has(msg.slot)) openStream(msg.slot, info?.userId ?? msg.slot);
+        startStream(msg.slot, msg.config);
+      }
+    } else if (msg.type === 'audio-config') {
+      // Pode chegar antes de eu pedir para assistir; aí não há o que ligar, e
+      // o servidor reenvia assim que o pedido chegar.
+      if (watching.has(msg.slot)) startAudio(msg.slot, msg.config);
+    } else if (msg.type === 'stream-stop') {
+      available.delete(msg.slot);
+      watching.delete(msg.slot);
+      endStream(msg.slot);
+    } else if (msg.type === 'room-gone') {
+      roomTokens = null;
+      // No Discord a sala é a da call: ela é recriada e a atividade volta para
+      // ela. No site, quem some é a sala escolhida, então o lugar é a lista.
+      if (inDiscord) {
+        limparSala();
+        entrarNaCall();
+      } else {
+        toast('A sala foi fechada.', true);
+        showLobby();
+      }
+    } else if (msg.type === 'error') {
+      toast(msg.message, true);
+    }
+  });
+
+  ws.addEventListener('close', () => {
+    clearInterval(wsPingTimer);
+    wsPingTimer = null;
+    closeAllStreams();
+    available.clear();
+    watching.clear();
+    participants = [];
+    renderGrid();
+
+    // Saímos da sala de propósito: nada a reconectar.
+    if (!roomTokens) return;
+
+    // Fechou sem nunca abrir: o token da sala foi recusado. Guardado, ele não
+    // vale mais depois que o servidor troca o segredo — e reconectar com o
+    // mesmo token repete o 401 até o fim dos tempos. Descartar e recomeçar é o
+    // único caminho que sai daqui.
+    if (!abriu) {
+      const id = roomInfo?.id;
+      limparSala();
+      if (id) remove(`sala:${id}`);
+      toast('Sua sessão expirou. Entrando de novo…');
+      if (inDiscord) entrarNaCall();
+      else showLobby();
+      return;
+    }
+
+    setEmpty('Reconectando…', 'A conexão com a sala caiu.');
+    // Backoff — evita martelar o servidor se ele estiver fora do ar.
+    setTimeout(connect, reconnectDelay);
+    reconnectDelay = Math.min(reconnectDelay * 2, 15_000);
+  });
+
+  ws.addEventListener('error', () => ws.close());
+}
+
+// --------------------------------------------------------------------- ações
+
+/**
+ * Estou transmitindo?
+ *
+ * myBroadcast entra no OU porque o `state` leva um instante para chegar, e sem
+ * isso o botão pisca de volta para "Compartilhar" logo após começar.
+ */
+/** As fontes que eu estou transmitindo agora, segundo o servidor. */
+function minhasFontes() {
+  const meu = session?.user?.id;
+  if (!meu) return new Set();
+  return new Set(slotsOf(meu).map((slot) => available.get(slot)?.fonte ?? 'tela'));
+}
+
+/**
+ * Existe uma aba de captura minha conectada?
+ *
+ * Quem responde é o servidor, pela lista `abas` do estado. Antes isto era
+ * deduzido do que estava no ar, e errava justamente no caso que mais importa:
+ * a aba recém-aberta, ainda sem transmitir, ficava invisível — e um novo clique
+ * abria outra em cima dela.
+ */
+function abaAberta() {
+  return abas.has(session?.user?.id);
+}
+
+/**
+ * As opções da próxima transmissão, editadas pela engrenagem.
+ *
+ * Ficam no localStorage porque são preferência de quem transmite, não estado da
+ * sala: quem escolheu 5 Mb/s uma vez não quer reescolher a cada abertura. E
+ * ficam aqui, e não num modal que aparece antes de cada início, porque decidir
+ * qualidade toda vez que se quer mostrar a tela é atrito no caminho curto.
+ */
+const AJUSTES_PADRAO = { bitrate: 2500000, fps: 30 };
+
+let ajustes = (() => {
+  try {
+    return { ...AJUSTES_PADRAO, ...JSON.parse(read('ajustes') ?? '{}') };
+  } catch {
+    return { ...AJUSTES_PADRAO };
+  }
+})();
+
+/**
+ * As opções no formato que a página de captura lê da URL.
+ *
+ * O som não vem aqui: a tela sempre o pede e a câmera nunca, então quem decide
+ * é a caixa "Compartilhar o áudio" do seletor do navegador — que já é uma
+ * escolha. Repetir a pergunta aqui só criava um jeito de a captura ir muda sem
+ * querer, e a câmera não leva o microfone porque a voz já anda pela call.
+ */
+function opcoesDaFonte() {
+  return {
+    q: String(ajustes.bitrate),
+    fps: String(ajustes.fps),
+  };
+}
+
+/**
+ * Liga uma fonte pelo caminho mais curto que existir para ela.
+ *
+ * Com uma aba já aberta, o pedido vai por ela em vez de abrir outra: seriam
+ * duas janelas para a pessoa manter vivas, e a que existe já faz as duas
+ * coisas. A aba resolve o que dá — câmera ela liga sozinha, tela precisa do
+ * clique lá, porque getDisplayMedia exige gesto do usuário.
+ */
+/** Nome da aba de captura, para reencontrá-la em vez de empilhar outra. */
+const JANELA_CAPTURA = 'discord-screen-captura';
+
+function ligarFonte(fonte) {
+  if (abaAberta()) return trazerAba(fonte);
+  abrirCaptura(fonte);
+}
+
+/**
+ * A aba de captura já existe: leva a pessoa até ela.
+ *
+ * O pedido pelo WebSocket sozinho não resolvia. Ele chega, a aba atende — mas
+ * em segundo plano, onde ninguém vê, e uma aba não consegue se trazer para a
+ * frente. Avisar por toast que ela existe deixava a pessoa procurando entre as
+ * janelas qual era.
+ */
+function trazerAba(fonte) {
+  // Dentro do Discord a aba foi parar no navegador do sistema, que é outro
+  // processo: daqui não há como focá-la. Abrir de novo é o que existe, e a
+  // fonte vai na URL, então a aba nova já nasce no que se pediu. Se a antiga
+  // continuar aberta, ficam duas — é o preço da fronteira entre os processos.
+  if (inDiscord) return abrirLink(fonte);
+
+  // Fora do Discord a aba é nossa, e o nome fixo a encontra. String vazia de
+  // propósito: passar a URL faria o navegador *navegar* nela, e navegar é
+  // recarregar — mataria a transmissão que estiver no ar ali dentro.
+  const aba = window.open('', JANELA_CAPTURA);
+  if (!aba) return abrirLink(fonte);
+
+  // `window.open('')` num nome que não existe cria uma aba em branco em vez de
+  // achar alguma. Aí ela precisa ser levada para o lugar certo.
+  let emBranco = false;
+  try {
+    emBranco = aba.location.href === 'about:blank';
+  } catch {
+    /* já navegou para outra origem: é a aba de captura mesmo */
+  }
+  if (emBranco) {
+    aba.location.href = urlDaCaptura(fonte).toString();
+    aba.focus();
+    return;
+  }
+
+  aba.focus();
+  // A URL não mudou, então o pedido tem de ir por fora dela. As opções vão
+  // junto: a aba pode estar aberta desde antes da última mexida na engrenagem.
+  ws?.send(JSON.stringify({ type: 'start-broadcast', fonte, opcoes: opcoesDaFonte() }));
+}
+
+async function abrirCaptura(fonte) {
+  if (!roomTokens) return;
+
+  // Só a tela tem chance de nascer aqui dentro; o Discord anula o getUserMedia
+  // no iframe, então a câmera vai direto para a aba.
+  if (fonte === 'tela' && (await broadcastFromHere())) return;
+
+  abrirLink(fonte);
+}
+
+/** O endereço da página de captura, já com as opções e a fonte pedida. */
+function urlDaCaptura(fonte) {
+  const url = new URL(roomTokens.shareUrl);
+  for (const [chave, valor] of Object.entries(opcoesDaFonte())) {
+    url.searchParams.set(chave, valor);
+  }
+  url.searchParams.set('fonte', fonte);
+  return url;
+}
+
+async function abrirLink(fonte) {
+  if (!roomTokens) return;
+  const url = urlDaCaptura(fonte).toString();
+
+  if (inDiscord) {
+    try {
+      const res = await sdk.commands.openExternalLink({ url });
+      // Clientes antigos devolvem null; só tratamos false como recusa explícita.
+      if (res?.opened === false) {
+        toast('Você recusou abrir o link. Sem isso não dá para capturar a tela.', true);
+      }
+    } catch (err) {
+      toast(`Não foi possível abrir o link: ${err.message}`, true);
+    }
+    return;
+  }
+
+  window.open(url, JANELA_CAPTURA);
+}
+
+/**
+ * A origem pública do site, ou null quando o servidor não a conhece.
+ *
+ * Ela só chega ao cliente dentro do shareUrl. Sem PUBLIC_ORIGIN configurado o
+ * servidor emite um caminho relativo, e aí não existe endereço externo a
+ * oferecer: dentro do Discord, location.origin é o proxy da atividade, que não
+ * abre por fora. Devolver null é o que faz o botão sumir em vez de levar a
+ * pessoa a um link quebrado.
+ */
+function origemDoSite() {
+  try {
+    return new URL(roomTokens.shareUrl).origin;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * O endereço desta sala no site, com o ingresso de quem já está aqui.
+ *
+ * Leva junto a tela em que a pessoa estava: abrir o site na sala certa mas na
+ * transmissão errada seria fazer ela procurar de novo o que já estava vendo.
+ *
+ * A tela cheia vai sempre, e não só quando já estava ligada aqui: sair da
+ * atividade é o pedido por mais espaço, e é o que este botão existe para
+ * atender.
+ */
+function urlDoSite(origem) {
+  const url = new URL(origem);
+  url.searchParams.set('t', roomTokens.viewerToken);
+  if (activeSlot !== null) {
+    url.searchParams.set('slot', String(activeSlot));
+    url.searchParams.set('cheia', '1');
+  }
+  return url.toString();
+}
+
+async function abrirNoSite() {
+  const origem = roomTokens && origemDoSite();
+  if (!origem) return;
+  const url = urlDoSite(origem);
+
+  if (!inDiscord) {
+    window.open(url, '_blank', 'noopener');
+    return;
+  }
+
+  try {
+    const res = await sdk.commands.openExternalLink({ url });
+    // Clientes antigos devolvem null; só false é recusa explícita.
+    if (res?.opened === false) toast('Você recusou abrir o link.', true);
+  } catch (err) {
+    toast(`Não foi possível abrir o link: ${err.message}`, true);
+  }
+}
+
+$('watchSite').addEventListener('click', abrirNoSite);
+
+/**
+ * Encerra a minha transmissão, tenha ela nascido aqui ou na aba externa.
+ *
+ * Funil único de propósito: parar pelo botão, sair da sala e a sala fechar
+ * precisam encerrar do mesmo jeito. Deixar a captura viva depois de sair é
+ * vazamento de tela, não detalhe de interface — e a aba externa tem conexão
+ * própria, então só o servidor consegue mandá-la parar.
+ */
+function stopMyBroadcast(fonte = null) {
+  // O myBroadcast é sempre a tela: é a única fonte que a atividade consegue
+  // capturar por conta própria.
+  if (!fonte || fonte === 'tela') {
+    myBroadcast?.stop();
+    myBroadcast = null;
+  }
+  if (participants.some((p) => p.broadcasting && p.id === session?.user?.id)) {
+    // Sem fonte o servidor derruba tudo — que é o certo para sair da sala.
+    ws?.send(JSON.stringify({ type: 'stop-broadcast', ...(fonte ? { fonte } : {}) }));
+  }
+}
+
+$('share').addEventListener('click', () => {
+  if (!session) return;
+
+  if (minhasFontes().has('tela') || myBroadcast) {
+    stopMyBroadcast('tela');
+    renderBar();
+    return;
+  }
+
+  ligarFonte('tela');
+});
+
+$('camera').addEventListener('click', () => {
+  if (!session) return;
+
+  if (minhasFontes().has('camera')) {
+    stopMyBroadcast('camera');
+    renderBar();
+    return;
+  }
+
+  ligarFonte('camera');
+});
+
+/** Espelha o volume atual no botão e no cursor, sem tocar no áudio. */
+function renderVolume() {
+  const pct = Math.round(volume * 100);
+  $('volume').value = String(pct);
+  $('volumeVal').textContent = pct + '%';
+
+  const rotulo = volume === 0 ? 'Ligar o som' : 'Silenciar';
+  $('mute').setAttribute('aria-label', rotulo);
+  $('mute').title = rotulo;
+  $('mute').classList.toggle('on', volume === 0);
+  $('muteOn').hidden = volume === 0;
+  $('muteOff').hidden = volume !== 0;
+}
+
+function setVolume(valor) {
+  volume = Math.min(1, Math.max(0, valor));
+  if (volume > 0) volumeAntes = volume;
+  store('volume', String(volume));
+  // O geral mudou: cada stream recalcula, porque o dele é o produto dos dois.
+  for (const slot of streams.keys()) aplicarVolume(slot);
+  renderVolume();
+}
+
+// Clique no alto-falante silencia e devolve; o cursor ajusta no meio termo.
+$('mute').addEventListener('click', () => setVolume(volume === 0 ? volumeAntes : 0));
+$('volume').addEventListener('input', (e) => setVolume(Number(e.target.value) / 100));
+
+/**
+ * Transmite a partir daqui mesmo, sem abrir aba.
+ *
+ * Só funciona se o Discord conceder `display-capture` ao iframe da Activity.
+ * Retorna true quando o fluxo foi resolvido — transmitindo, ou a pessoa
+ * cancelou o seletor — e false quando resta cair para a aba externa.
+ *
+ * NotAllowedError é ambíguo: vale tanto para "a plataforma bloqueou" quanto
+ * para "a pessoa cancelou". O tempo separa os dois — bloqueio de política falha
+ * na hora, sem nunca desenhar o seletor, enquanto cancelar exige que alguém
+ * tenha visto a janela e clicado.
+ */
+async function broadcastFromHere() {
+  if (!navigator.mediaDevices?.getDisplayMedia || !window.VideoEncoder) return false;
+
+  if (!roomTokens) return false;
+  const shareToken = new URL(roomTokens.shareUrl).searchParams.get('t');
+  if (!shareToken) return false;
+
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+
+  const b = createBroadcaster({
+    wsUrl: `${proto}://${location.host}${P}/ws?t=${encodeURIComponent(shareToken)}`,
+    apiBase: P,
+    bitrate: ajustes.bitrate,
+    fps: ajustes.fps,
+    audio: true,
+    onAviso: (m) => toast(m, true),
+    onEnd: () => {
+      myBroadcast = null;
+      renderBar();
+    },
+  });
+
+  const startedAt = performance.now();
+  try {
+    await b.start();
+    myBroadcast = b;
+    renderBar();
+    return true;
+  } catch (err) {
+    const showedPicker = performance.now() - startedAt > 250;
+    if (err.name === 'NotAllowedError' && showedPicker) return true;
+    return false;
+  }
+}
+
+// ------------------------------------------------------- modais das salas
+
+$('newRoom').addEventListener('click', () => {
+  if (!session) return;
+  $('createName').value = '';
+  $('createPass').value = '';
+  $('createModal').hidden = false;
+  $('createName').focus();
+});
+
+$('createCancel').addEventListener('click', () => ($('createModal').hidden = true));
+$('createModal').addEventListener('click', (e) => {
+  if (e.target === $('createModal')) $('createModal').hidden = true;
+});
+
+$('createGo').addEventListener('click', async () => {
+  const name = $('createName').value.trim();
+
+  try {
+    const tokens = await post(`${P}/api/rooms/create`, {
+      identity: session.identity,
+      name,
+      password: $('createPass').value || null,
+    });
+    $('createModal').hidden = true;
+    openRoom(tokens, {
+      id: tokens.roomId,
+      // O servidor decide o nome quando fica em branco.
+      name: name || `Sala de ${session.user.name}`,
+      owner: session.user.name,
+    });
+  } catch (err) {
+    toast(err.message, true);
+  }
+});
+
+$('joinCancel').addEventListener('click', () => ($('joinModal').hidden = true));
+$('joinModal').addEventListener('click', (e) => {
+  if (e.target === $('joinModal')) $('joinModal').hidden = true;
+});
+$('joinPass').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') $('joinGo').click();
+});
+
+$('joinGo').addEventListener('click', async () => {
+  if (!joinTarget) return;
+  $('joinModal').hidden = true;
+  await enterRoom(joinTarget, $('joinPass').value);
+});
+
+// Ajustes da sala: só o dono muda a senha, e o servidor confere de novo.
+$('roomCancel').addEventListener('click', () => ($('roomModal').hidden = true));
+$('roomModal').addEventListener('click', (e) => {
+  if (e.target === $('roomModal')) $('roomModal').hidden = true;
+});
+
+$('roomSave').addEventListener('click', async () => {
+  try {
+    const r = await post(`${P}/api/rooms/password`, {
+      identity: session.identity,
+      roomId: roomTokens.roomId,
+      password: $('roomPass').value || '',
+    });
+    $('roomModal').hidden = true;
+    toast(r.locked ? 'Sala protegida com senha.' : 'Senha removida.');
+  } catch (err) {
+    toast(err.message, true);
+  }
+});
+
+function openRoomSettings() {
+  $('roomSub').textContent = roomInfo?.name ?? '';
+  $('roomPass').value = '';
+  $('roomModal').hidden = false;
+  $('roomPass').focus();
+}
+
+$('roomSettings').addEventListener('click', openRoomSettings);
+
+// ----------------------------------------------------------------- painel
+
+/**
+ * As barras somem com o cursor parado e voltam ao primeiro movimento. Valem
+ * dentro da sala inteira, transmitindo ou não — flutuando, elas cobrem o que
+ * está embaixo nos dois casos.
+ *
+ * O relógio corre sempre: um `if` aqui pagaria uma consulta ao estado a cada
+ * movimento do mouse para poupar um setTimeout, e quem decide se a classe pinta
+ * alguma coisa já é o CSS.
+ *
+ * Cursor que sai da janela recolhe na hora, sem esperar o relógio: não há mais
+ * movimento nenhum para vir, então o tempo de espera só adiaria o inevitável.
+ */
+const OCIO = 2500;
+let ocioso = null;
+
+function acordarBarras() {
+  $('app').classList.remove('ocioso', 'idle-hidden');
+  clearTimeout(ocioso);
+  ocioso = setTimeout(() => {
+    $('app').classList.add('ocioso');
+    if (activeSlot !== null) {
+      $('app').classList.add('idle-hidden');
+    }
+  }, OCIO);
+}
+
+function recolherBarras() {
+  clearTimeout(ocioso);
+  $('app').classList.add('ocioso');
+  if (activeSlot !== null) {
+    $('app').classList.add('idle-hidden');
+  }
+}
+
+window.addEventListener('mousemove', acordarBarras);
+window.addEventListener('pointerdown', acordarBarras);
+document.addEventListener('mouseleave', recolherBarras);
+acordarBarras();
+
+// Controles de enquadramento (Fit Mode)
+$('btnFitContain')?.addEventListener('click', () => applyFitMode('contain'));
+$('btnFitCover')?.addEventListener('click', () => applyFitMode('cover'));
+$('btnFitOriginal')?.addEventListener('click', () => applyFitMode('original'));
+
+// Controle de latência (Latency Mode)
+$('latencySelect')?.addEventListener('change', (e) => applyLatencyMode(e.target.value));
+
+// Alternar Debug Overlay HUD
+$('statsToggle')?.addEventListener('click', toggleDebugOverlay);
+$('debugClose')?.addEventListener('click', toggleDebugOverlay);
+
+// Tela cheia com fallback gracioso para maximização no iframe da Activity
+$('fullscreen')?.addEventListener('click', async () => {
+  if (activeSlot === null) return;
+  const isFs = Boolean(document.fullscreenElement);
+  if (!isFs) {
+    try {
+      if (document.documentElement.requestFullscreen) {
+        await document.documentElement.requestFullscreen();
+      }
+    } catch {
+      // Ignora erro de Fullscreen API bloqueada em iframe
+    }
+    telaCheia = true;
+  } else {
+    try {
+      if (document.exitFullscreen) {
+        await document.exitFullscreen();
+      }
+    } catch {
+      // Ignora erro ao sair de tela cheia
+    }
+    telaCheia = false;
+  }
+  renderGrid();
+});
+
+window.addEventListener('keydown', (e) => {
+  if (e.shiftKey && (e.key === 'D' || e.key === 'd')) {
+    e.preventDefault();
+    toggleDebugOverlay();
+    return;
+  }
 
   if (e.key !== 'Escape') return;
 
@@ -1540,3 +2756,56 @@ $('probe')?.addEventListener('click', async () => {
     toast(`Bloqueado (${err.name}): ${err.message}`, true);
   }
 });
+
+function getStutterLog() {
+  const s = activeSlot !== null ? streams.get(activeSlot) : [...streams.values()][0];
+  const m = s?.player ? s.player.getMetrics() : null;
+  const a = s?.audio?.getAudioClock() ?? null;
+
+  return {
+    capturedAt: new Date().toISOString(),
+    inDiscord,
+    userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'headless',
+    devicePixelRatio: typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1,
+    viewport: typeof window !== 'undefined' ? `${window.innerWidth}×${window.innerHeight}` : '1920×1080',
+    activeSlot,
+    availableSlots: [...available.keys()],
+    streamActive: Boolean(s && s.player),
+    metrics: m,
+    audioClock: a
+      ? {
+          active: a.active,
+          bufferAheadMs: Math.round(a.bufferAheadMs),
+          underrunCount: a.underrunCount,
+        }
+      : null,
+    recentStutterEvents: m?.stutterEvents || [],
+  };
+}
+
+function copyStutterLog() {
+  const log = getStutterLog();
+  const text = JSON.stringify(log, null, 2);
+
+  if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(() => {
+      toast('Relatório de diagnóstico copiado para a área de transferência!');
+    }).catch(() => {
+      if (typeof prompt !== 'undefined') {
+        prompt('Copie o relatório JSON abaixo:', text);
+      } else {
+        console.log('[DIAGNOSTIC_REPORT_JSON]', text);
+      }
+    });
+  } else if (typeof prompt !== 'undefined') {
+    prompt('Copie o relatório JSON abaixo:', text);
+  } else {
+    console.log('[DIAGNOSTIC_REPORT_JSON]', text);
+  }
+  return log;
+}
+
+if (typeof window !== 'undefined') {
+  window.getStutterLog = getStutterLog;
+  window.copyStutterLog = copyStutterLog;
+}
