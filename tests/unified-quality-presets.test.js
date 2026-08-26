@@ -123,14 +123,50 @@ describe('Unified Stream Quality Presets', () => {
     expect(boundedFps.fps).toBe(30);
   });
 
-  it('4. Capture constraints request 60 FPS for Máxima and 30 FPS for others', () => {
-    const opts60 = opcoesTela({ fps: 60 });
-    expect(opts60.video.frameRate.ideal).toBe(60);
-    expect(opts60.video.frameRate.max).toBe(60);
+  it('4. Initial getDisplayMedia capture constraints match selected quality preset', () => {
+    // Economia: 1280x720@30
+    const optsEconomia = opcoesTela({
+      fps: QUALITY_PRESETS.economia.fps,
+      width: QUALITY_PRESETS.economia.width,
+      height: QUALITY_PRESETS.economia.height,
+    });
+    expect(optsEconomia.video.width.ideal).toBe(1280);
+    expect(optsEconomia.video.height.ideal).toBe(720);
+    expect(optsEconomia.video.frameRate.ideal).toBe(30);
+    expect(optsEconomia.video.frameRate.max).toBe(30);
 
-    const opts30 = opcoesTela({ fps: 30 });
-    expect(opts30.video.frameRate.ideal).toBe(30);
-    expect(opts30.video.frameRate.max).toBe(30);
+    // Equilibrado: 1600x900@30
+    const optsEquilibrado = opcoesTela({
+      fps: QUALITY_PRESETS.equilibrado.fps,
+      width: QUALITY_PRESETS.equilibrado.width,
+      height: QUALITY_PRESETS.equilibrado.height,
+    });
+    expect(optsEquilibrado.video.width.ideal).toBe(1600);
+    expect(optsEquilibrado.video.height.ideal).toBe(900);
+    expect(optsEquilibrado.video.frameRate.ideal).toBe(30);
+    expect(optsEquilibrado.video.frameRate.max).toBe(30);
+
+    // Alta: 1920x1080@30
+    const optsAlta = opcoesTela({
+      fps: QUALITY_PRESETS.alta.fps,
+      width: QUALITY_PRESETS.alta.width,
+      height: QUALITY_PRESETS.alta.height,
+    });
+    expect(optsAlta.video.width.ideal).toBe(1920);
+    expect(optsAlta.video.height.ideal).toBe(1080);
+    expect(optsAlta.video.frameRate.ideal).toBe(30);
+    expect(optsAlta.video.frameRate.max).toBe(30);
+
+    // Máxima: 1920x1080@60
+    const optsMaxima = opcoesTela({
+      fps: QUALITY_PRESETS.maxima.fps,
+      width: QUALITY_PRESETS.maxima.width,
+      height: QUALITY_PRESETS.maxima.height,
+    });
+    expect(optsMaxima.video.width.ideal).toBe(1920);
+    expect(optsMaxima.video.height.ideal).toBe(1080);
+    expect(optsMaxima.video.frameRate.ideal).toBe(60);
+    expect(optsMaxima.video.frameRate.max).toBe(60);
   });
 
   it('5. Broadcaster configured with Máxima uses 1080p60 and 8 Mbps', () => {

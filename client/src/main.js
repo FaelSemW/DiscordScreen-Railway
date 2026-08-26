@@ -2574,6 +2574,8 @@ async function broadcastFromHere(quality = null) {
     preset: q.preset,
     bitrate: q.bitrate,
     fps: q.fps,
+    width: q.width,
+    height: q.height,
     priority: q.priority,
     audio: true,
     onAviso: (m) => toast(m, true),

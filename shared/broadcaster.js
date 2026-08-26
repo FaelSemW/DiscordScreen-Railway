@@ -283,13 +283,15 @@ export function restricoesDeSom() {
  * windowAudio: 'window' pede o som da janela escolhida em vez de só o da aba,
  * que é o que destrava transmitir um jogo com o som dele.
  */
-export function opcoesTela({ fps = 60, comSom = false, video } = {}) {
+export function opcoesTela({ fps = 60, width, height, comSom = false, video } = {}) {
   const targetFps = Number(fps) || 60;
+  const targetWidth = Number(width) || (targetFps === 60 ? 1920 : 1600);
+  const targetHeight = Number(height) || (targetFps === 60 ? 1080 : 900);
   const opts = {
     video: video ?? {
       frameRate: { ideal: targetFps, max: targetFps },
-      width: { ideal: 1920, max: 3840 },
-      height: { ideal: 1080, max: 2160 },
+      width: { ideal: targetWidth, max: 3840 },
+      height: { ideal: targetHeight, max: 2160 },
     },
     audio: comSom ? restricoesDeSom() : false,
   };
@@ -385,8 +387,10 @@ export function createBroadcaster(opts) {
   let adaptiveReason = '';
   let bitrate;
   let fps;
+  let targetWidth;
+  let targetHeight;
 
-  // Determina taxa e bitrate iniciais
+  // Determina taxa, bitrate e dimensões iniciais
   if (
     currentPreset &&
     QUALITY_PRESETS[currentPreset] &&
@@ -395,12 +399,18 @@ export function createBroadcaster(opts) {
   ) {
     bitrate = QUALITY_PRESETS[currentPreset].bitrate;
     fps = QUALITY_PRESETS[currentPreset].fps;
+    targetWidth = QUALITY_PRESETS[currentPreset].width;
+    targetHeight = QUALITY_PRESETS[currentPreset].height;
   } else if (currentPreset === 'automatico') {
     bitrate = currentLadder[0].bitrate;
     fps = currentLadder[0].fps;
+    targetWidth = currentLadder[0].width;
+    targetHeight = currentLadder[0].height;
   } else {
-    bitrate = Number(rawBitrate) || 2_500_000;
+    bitrate = Number(rawBitrate) || 4_000_000;
     fps = Number(rawFps) || 30;
+    targetWidth = Number(opts.width) || (fps === 60 ? 1920 : 1600);
+    targetHeight = Number(opts.height) || (fps === 60 ? 1080 : 900);
   }
 
   let ws = null;
@@ -879,7 +889,14 @@ export function createBroadcaster(opts) {
    * veto do prepararSom, aplicado antes de o som existir — quem escolhe a tela
    * inteira volta sem faixa nenhuma, em vez de com uma que precisa ser morta.
    */
-  const opcoesCaptura = (over) => opcoesTela({ fps, comSom: audio, ...over });
+  const opcoesCaptura = (over) =>
+    opcoesTela({
+      fps,
+      width: targetWidth,
+      height: targetHeight,
+      comSom: audio,
+      ...over,
+    });
 
   /**
    * Dá para confiar no som que veio junto de uma janela?
@@ -1741,6 +1758,8 @@ export function createBroadcaster(opts) {
         const p = QUALITY_PRESETS[currentPreset];
         nextBitrate = p.bitrate;
         nextFps = p.fps;
+        targetWidth = p.width;
+        targetHeight = p.height;
       }
     }
 

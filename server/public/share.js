@@ -56,6 +56,8 @@ function getEffectiveQuality() {
     if (p === 'automatico') {
       return {
         preset: 'automatico',
+        width: 1920,
+        height: 1080,
         fps: 60,
         bitrate: 8_000_000,
         priority: opcoes.priority || 'fluidez',
@@ -63,6 +65,8 @@ function getEffectiveQuality() {
     }
     return {
       preset: p,
+      width: QUALITY_PRESETS[p].width ?? 1600,
+      height: QUALITY_PRESETS[p].height ?? 900,
       fps: QUALITY_PRESETS[p].fps ?? 30,
       bitrate: QUALITY_PRESETS[p].bitrate ?? 4_000_000,
       priority: QUALITY_PRESETS[p].priority || 'fluidez',
@@ -70,6 +74,8 @@ function getEffectiveQuality() {
   }
   return {
     preset: 'personalizado',
+    width: 1600,
+    height: 900,
     fps: Number(opcoes.fps) || 30,
     bitrate: Number(opcoes.bitrate) || 4_000_000,
     priority: opcoes.priority || 'fluidez',
@@ -380,7 +386,7 @@ function criarPainel(fonte) {
     const q = getEffectiveQuality();
     try {
       const s = await navigator.mediaDevices.getDisplayMedia(
-        opcoesTela({ fps: q.fps, comSom: true }),
+        opcoesTela({ fps: q.fps, width: q.width, height: q.height, comSom: true }),
       );
       pararPrevia();
       mostrarPrevia(s);
