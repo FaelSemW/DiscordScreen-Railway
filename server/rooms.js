@@ -407,24 +407,10 @@ function derrubarAbandonadas(room, now) {
       entry.semDonoDesde = null;
       continue;
     }
-    // 1. Broadcaster tem viewer próprio na sala
     if (temViewer(room, entry.info.id)) {
       entry.semDonoDesde = null;
       continue;
     }
-    // 2. Aba de captura/controle da pessoa ainda está conectada
-    const temControle = [...room.controles].some((ws) => ws.__controlOf === entry.info.id);
-    if (temControle) {
-      entry.semDonoDesde = null;
-      continue;
-    }
-    // 3. Há espectadores assistindo ativamente a transmissão
-    const temEspectadores = watchersOf(room, entry.slot).length > 0;
-    if (temEspectadores) {
-      entry.semDonoDesde = null;
-      continue;
-    }
-
     if (entry.semDonoDesde === null) {
       entry.semDonoDesde = now;
       continue;
@@ -433,9 +419,9 @@ function derrubarAbandonadas(room, now) {
 
     sendJson(entry.ws, {
       type: 'stop-request',
-      motivo: 'A sala ficou vazia, então a transmissão parou.',
+      motivo: 'Você saiu da atividade, então a transmissão parou.',
     });
-    console.log(`[room ${room.id}] ${entry.info.name} ausente sem espectadores — ${entry.fonte} encerrada`);
+    console.log(`[room ${room.id}] ${entry.info.name} saiu da sala — ${entry.fonte} encerrada`);
     detachBroadcaster(room, entry.ws);
   }
 }
@@ -622,10 +608,15 @@ export function attachBroadcaster(room, ws, info, fonte = 'tela') {
 
     // Se o socket anterior já fechou ou está em reconexão, reassume o slot perfeitamente
     if (!existing.ws || existing.ws.readyState !== existing.ws.OPEN) {
+      if (existing.reconnectGraceTimer) {
+        clearTimeout(existing.reconnectGraceTimer);
+        existing.reconnectGraceTimer = null;
+      }
       existing.ws = ws;
       existing.semDonoDesde = null;
+      existing.reconnectingSince = null;
       ws.__entry = existing;
-      sendJson(ws, { type: 'slot', slot: existing.slot });
+      sendJson(ws, { type: 'slot', slot: existing.slot, resumed: true });
       broadcastState(room);
       return existing;
     }
@@ -825,9 +816,31 @@ export function stopStream(room, entry) {
   toViewers(room, { type: 'stream-stop', slot: entry.slot });
 }
 
-export function detachBroadcaster(room, ws) {
-  const entry = ws.__entry;
+export function handleBroadcasterDisconnect(room, ws, code, reason) {
+  const entry = ws?.__entry;
   if (!entry || room.broadcasters.get(entry.chave) !== entry) return;
+
+  entry.ws = null;
+  entry.reconnectingSince = Date.now();
+  if (entry.reconnectGraceTimer) clearTimeout(entry.reconnectGraceTimer);
+
+  entry.reconnectGraceTimer = setTimeout(() => {
+    if (entry.ws === null && room.broadcasters.get(entry.chave) === entry) {
+      console.log(`[room ${room.id}] janela de reconexão de ${entry.info.name} expirou (10s)`);
+      detachBroadcaster(room, ws);
+    }
+  }, 10_000);
+  entry.reconnectGraceTimer.unref?.();
+}
+
+export function detachBroadcaster(room, ws) {
+  const entry = ws?.__entry;
+  if (!entry || room.broadcasters.get(entry.chave) !== entry) return;
+
+  if (entry.reconnectGraceTimer) {
+    clearTimeout(entry.reconnectGraceTimer);
+    entry.reconnectGraceTimer = null;
+  }
 
   stopStream(room, entry);
   room.broadcasters.delete(entry.chave);

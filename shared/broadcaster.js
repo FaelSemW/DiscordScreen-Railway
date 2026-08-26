@@ -1539,7 +1539,7 @@ export function createBroadcaster(opts) {
           if (ws?.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'ping', timestamp: Date.now() }));
           }
-        }, 10_000);
+        }, 20_000);
         wsPingTimer.unref?.();
 
         resolve();
