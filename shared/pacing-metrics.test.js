@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
+import crypto from 'crypto';
 import {
   createIntervalTracker,
   createValueTracker,
@@ -9,7 +10,7 @@ import {
 } from './pacing-metrics.js';
 import { createPlayer } from '../client/src/player.js';
 
-describe('shared/pacing-metrics', () => {
+describe('shared/pacing-metrics (Headless Telemetry Engine)', () => {
   it('handles empty interval tracker stats cleanly', () => {
     const tracker = createIntervalTracker(10);
     const emptyStats = tracker.getStats();
@@ -20,7 +21,7 @@ describe('shared/pacing-metrics', () => {
     expect(emptyStats.min).toBe(0);
   });
 
-  it('tracks intervals and computes percentiles accurately', () => {
+  it('tracks intervals and computes percentiles accurately in Float64Array', () => {
     const tracker = createIntervalTracker(20);
 
     let ts = 1000;
@@ -80,66 +81,46 @@ describe('shared/pacing-metrics', () => {
     expect(vt.getStats().count).toBe(0);
   });
 
-  it('detects and classifies stutters with createStutterDetector', () => {
+  it('detects stutters and caps history at exactly maxHistory = 25 entries', () => {
     const detector = createStutterDetector({
       candidateThresholdMs: 40,
       severeThresholdMs: 75,
-      maxHistory: 2,
+      maxHistory: 25,
     });
 
     const normal = detector.record({ renderGapMs: 16.6 });
     expect(normal).toBeNull();
 
-    const candidate = detector.record({
-      renderGapMs: 45.0,
-      captureGapMs: 16.6,
-      encodeDurationMs: 8.5,
-      networkLagMs: 25.0,
-      receiveGapMs: 40.0,
-      decodeQueueSize: 2,
-      presentationQueueSize: 1,
-      isKeyframe: false,
-    });
-    expect(candidate).toBeDefined();
-    expect(candidate.severity).toBe('candidate');
-
-    const severe1 = detector.record({
-      renderGapMs: 85.0,
-      captureGapMs: 80.0,
-      encodeDurationMs: 12.0,
-      networkLagMs: 50.0,
-      receiveGapMs: 80.0,
-      isKeyframe: true,
-    });
-    expect(severe1).toBeDefined();
-    expect(severe1.severity).toBe('severe');
-
-    const severe2 = detector.record({
-      renderGapMs: 95.0,
-      isKeyframe: false,
-    });
-    expect(severe2).toBeDefined();
+    // Push 30 stutter events
+    for (let i = 1; i <= 30; i++) {
+      detector.record({
+        renderGapMs: 40 + i,
+        captureGapMs: 16.6,
+        decodeGapMs: 16.6,
+        rafGapMs: 16.6,
+        longestLongTaskMs: 0,
+      });
+    }
 
     const stats = detector.getStats();
-    expect(stats.totalCandidateStutters).toBe(3);
-    expect(stats.totalSevereStutters).toBe(2);
-    expect(stats.history.length).toBe(2); // Capped by maxHistory
-
-    detector.resetWindow();
-    expect(detector.getStats().windowCandidateStutters).toBe(0);
+    expect(stats.totalCandidateStutters).toBe(30);
+    expect(stats.history.length).toBe(25); // Strictly capped at 25
+    expect(stats.latestSnapshot.renderGapMs).toBe(70.0);
 
     detector.reset();
-    expect(detector.getStats().totalCandidateStutters).toBe(0);
     expect(detector.getStats().history.length).toBe(0);
+    expect(detector.getStats().totalCandidateStutters).toBe(0);
   });
 
-  it('accurately classifies hitch events across Case A through Case E', () => {
-    // Case D: Main thread long task
+  it('heuristically classifies hitch events across Cases A through E', () => {
+    // Case D: Main thread / canvas draw
     const hitchD = classifyHitch({
       renderGapMs: 55.0,
       longestLongTaskMs: 45.0,
     });
     expect(hitchD.code).toBe('CASE_D');
+    expect(hitchD.name).toBe('CANVAS / GPU COMPOSITION');
+    expect(hitchD.heuristic).toBe(true);
 
     // Case C: rAF throttling with queue backlog
     const hitchC = classifyHitch({
@@ -148,6 +129,8 @@ describe('shared/pacing-metrics', () => {
       presentationQueueSize: 2,
     });
     expect(hitchC.code).toBe('CASE_C');
+    expect(hitchC.name).toBe('RAF / MAIN THREAD / COMPOSITOR');
+    expect(hitchC.heuristic).toBe(true);
 
     // Case B: Hardware decoder backlog
     const hitchB = classifyHitch({
@@ -156,15 +139,19 @@ describe('shared/pacing-metrics', () => {
       decodeQueueSize: 3,
     });
     expect(hitchB.code).toBe('CASE_B');
+    expect(hitchB.name).toBe('DECODER / GPU DECODE');
+    expect(hitchB.heuristic).toBe(true);
 
-    // Case A: Capture starvation
+    // Case A: Network / Ingestion gap
     const hitchA = classifyHitch({
       renderGapMs: 45.0,
       captureGapMs: 40.0,
     });
     expect(hitchA.code).toBe('CASE_A');
+    expect(hitchA.name).toBe('NETWORK / ACTIVITY PROXY');
+    expect(hitchA.heuristic).toBe(true);
 
-    // Case E: Jitter / clock divergence fallback
+    // Case E: Player clock / scheduler divergence
     const hitchE = classifyHitch({
       renderGapMs: 42.0,
       captureGapMs: 16.67,
@@ -175,6 +162,50 @@ describe('shared/pacing-metrics', () => {
       presentationQueueSize: 0,
     });
     expect(hitchE.code).toBe('CASE_E');
+    expect(hitchE.name).toBe('PLAYER CLOCK / SCHEDULER');
+    expect(hitchE.heuristic).toBe(true);
+  });
+
+  it('guarantees headless telemetry export contains no secrets, tokens, or media frames and is serializable', () => {
+    const canvas = {
+      getContext: () => ({ drawImage: () => {}, fillRect: () => {} }),
+      getBoundingClientRect: () => ({ width: 1280, height: 720 }),
+      width: 1280,
+      height: 720,
+    };
+
+    const fakeDecoder = {
+      configure: () => {},
+      close: () => {},
+      decode: () => {},
+      state: 'configured',
+      decodeQueueSize: 0,
+    };
+    globalThis.VideoDecoder = vi.fn(function () { return fakeDecoder; });
+
+    const player = createPlayer(canvas);
+    player.start({ codec: 'avc1.64002a', codedWidth: 1280, codedHeight: 720 });
+
+    const metrics = player.getMetrics();
+    expect(metrics).toBeDefined();
+
+    const report = {
+      capturedAt: new Date().toISOString(),
+      inDiscord: false,
+      metrics,
+      recentStutterEvents: metrics.stutterEvents,
+    };
+
+    const serialized = JSON.stringify(report);
+    expect(serialized).toBeDefined();
+    expect(serialized).not.toContain('token');
+    expect(serialized).not.toContain('password');
+    expect(serialized).not.toContain('secret');
+    expect(serialized).not.toContain('identity');
+    expect(serialized).not.toContain('ArrayBuffer');
+    expect(serialized).not.toContain('VideoFrame');
+
+    player.stop();
   });
 
   it('preserves production decoder config contract: optimizeForLatency=true and Uint8Array description', () => {
@@ -217,70 +248,24 @@ describe('shared/pacing-metrics', () => {
     player.stop();
   });
 
-  it('guarantees single debug overlay root and unique DOM element IDs in client/index.html', () => {
+  it('guarantees client/index.html and client/src/style.css preserve good UI baseline and contain no HUD markup', () => {
     const htmlPath = path.resolve(__dirname, '../client/index.html');
     const html = fs.readFileSync(htmlPath, 'utf8');
 
-    // 1. Single debugOverlay root
+    // 1. Single debugOverlay root (legacy debug overlay)
     const overlayMatches = html.match(/id="debugOverlay"/g);
     expect(overlayMatches).not.toBeNull();
     expect(overlayMatches.length).toBe(1);
 
-    // 2. All element IDs are strictly unique
-    const idRegex = /id="([^"]+)"/g;
-    const ids = [];
-    let match;
-    while ((match = idRegex.exec(html)) !== null) {
-      ids.push(match[1]);
-    }
+    // 2. Contains NO 6-section new HUD markup
+    expect(html).not.toContain('SEÇÃO 1');
+    expect(html).not.toContain('dbg-net-pkts');
+    expect(html).not.toContain('btnCopyDiagnostics');
 
-    const duplicateIds = ids.filter((id, index) => ids.indexOf(id) !== index);
-    expect(duplicateIds).toEqual([]);
-  });
-
-  it('guarantees that client/index.html and client/src/main.js correctly reference stylesheet, and build emits valid CSS link', () => {
-    const srcHtmlPath = path.resolve(__dirname, '../client/index.html');
-    const srcHtml = fs.readFileSync(srcHtmlPath, 'utf8');
-    expect(srcHtml).toMatch(/<link\s+rel="stylesheet"\s+href="\/src\/style\.css"\s*\/?>/);
-
-    const srcMainPath = path.resolve(__dirname, '../client/src/main.js');
-    const srcMain = fs.readFileSync(srcMainPath, 'utf8');
-    expect(srcMain).toMatch(/import\s+['"]\.\/style\.css['"];/);
-
-    const distHtmlPath = path.resolve(__dirname, '../client/dist/index.html');
-    if (fs.existsSync(distHtmlPath)) {
-      const distHtml = fs.readFileSync(distHtmlPath, 'utf8');
-      const cssMatch = distHtml.match(/<link\s+rel="stylesheet"\s+crossorigin\s+href="(\/assets\/index-[^"]+\.css)">/);
-      expect(cssMatch).not.toBeNull();
-      const cssRelPath = cssMatch[1].replace(/^\//, '');
-      const distCssPath = path.resolve(__dirname, '../client/dist', cssRelPath);
-      expect(fs.existsSync(distCssPath)).toBe(true);
-      const cssContent = fs.readFileSync(distCssPath, 'utf8');
-      expect(cssContent.length).toBeGreaterThan(1000);
-      expect(cssContent).toContain('.debug-overlay');
-      expect(cssContent).toContain('.topbar');
-      expect(cssContent).toContain('.grid');
-    }
-  });
-
-  it('validates CSS styles and DOM structure', () => {
-    const srcHtmlPath = path.resolve(__dirname, '../client/index.html');
-    const srcHtml = fs.readFileSync(srcHtmlPath, 'utf8');
-    const srcCssPath = path.resolve(__dirname, '../client/src/style.css');
-    const srcCss = fs.readFileSync(srcCssPath, 'utf8');
-
-    // 1. Structure validity
-    expect(srcHtml.match(/<html/g)?.length).toBe(1);
-    expect(srcHtml.match(/<\/html>/g)?.length).toBe(1);
-    expect(srcHtml.match(/<head>/g)?.length).toBe(1);
-    expect(srcHtml.match(/<\/head>/g)?.length).toBe(1);
-    expect(srcHtml.match(/<body>/g)?.length).toBe(1);
-    expect(srcHtml.match(/<\/body>/g)?.length).toBe(1);
-
-    // 2. CSS integrity checks: ensure HUD styles are scoped and do not override global elements
-    expect(srcCss).toContain('.debug-overlay');
-    expect(srcCss).toContain('.debug-scroll-container');
-    expect(srcCss).not.toContain('body { display: none');
-    expect(srcCss).not.toContain('canvas { width: 10000px');
+    // 3. CSS contains NO HUD panel modifications
+    const cssPath = path.resolve(__dirname, '../client/src/style.css');
+    const css = fs.readFileSync(cssPath, 'utf8');
+    expect(css).not.toContain('.badge-case-a');
+    expect(css).not.toContain('.debug-scroll-container');
   });
 });

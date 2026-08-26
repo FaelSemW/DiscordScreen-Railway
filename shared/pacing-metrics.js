@@ -1,13 +1,13 @@
 /**
- * High-Resolution Frame Pacing & Interval Statistics Engine.
+ * Headless High-Resolution Frame Pacing & Hitch Classification Engine.
  *
- * Lightweight, zero-dependency metrics collector for measuring:
- * - Capture cadence & jitter
- * - Encoder input/output intervals
- * - Encode durations & queue sizes
- * - Network receive intervals
- * - Viewer presentation intervals & stutter events (>33ms, >50ms, >75ms)
- * - Forensic hitch classification (Case A through Case E)
+ * Lightweight, zero-dependency, bounded telemetry collector:
+ * - High-resolution interval tracking via Float64Array ring buffers (p50/p95/p99/jitter/maxGap)
+ * - Main-thread long task observer
+ * - Canvas draw duration tracker
+ * - VideoFrame lifetime tracker
+ * - Bounded 25-event hitch ring buffer with heuristic root-cause classification
+ * - Zero secrets, zero tokens, zero media buffers
  */
 
 export function createIntervalTracker(windowSize = 120) {
@@ -163,7 +163,7 @@ export function createValueTracker(windowSize = 120) {
 
   function getStats() {
     if (count === 0) {
-      return { avg: 0, p50: 0, p95: 0, max: 0, min: 0, last: 0, count: 0 };
+      return { avg: 0, p50: 0, p95: 0, p99: 0, max: 0, min: 0, last: 0, count: 0 };
     }
 
     const current = new Float64Array(count);
@@ -185,6 +185,7 @@ export function createValueTracker(windowSize = 120) {
       avg: Math.round((sum / count) * 100) / 100,
       p50: Math.round(current[Math.floor(count * 0.5)] * 100) / 100,
       p95: Math.round(current[Math.min(count - 1, Math.floor(count * 0.95))] * 100) / 100,
+      p99: Math.round(current[Math.min(count - 1, Math.floor(count * 0.99))] * 100) / 100,
       max: Math.round(max * 100) / 100,
       min: Math.round((min === Infinity ? 0 : min) * 100) / 100,
       last: lastValue,
@@ -205,6 +206,16 @@ export function createValueTracker(windowSize = 120) {
   };
 }
 
+/**
+ * Heuristic Hitch Classifier.
+ *
+ * Categorizes presentation delays into suspected pipeline stages:
+ * - CASE A: NETWORK / ACTIVITY PROXY (Ingestion/delivery gap)
+ * - CASE B: DECODER / GPU DECODE (Hardware decoder delay or queue backlog)
+ * - CASE C: RAF / MAIN THREAD / COMPOSITOR (rAF cadence drop with queued frames)
+ * - CASE D: CANVAS / GPU COMPOSITION (Main-thread long task or heavy drawImage)
+ * - CASE E: PLAYER CLOCK / SCHEDULER (A/V clock drift or adaptive resync)
+ */
 export function classifyHitch({
   renderGapMs,
   captureGapMs = 16.67,
@@ -218,20 +229,24 @@ export function classifyHitch({
 }) {
   const threshold = expectedIntervalMs > 25 ? 45.0 : 25.0;
 
-  // Case D: Main Thread Long Task
+  // Case D: Canvas Draw / Main-thread long task
   if (longestLongTaskMs >= 30.0 || canvasDrawMs >= 20.0) {
     return {
       code: 'CASE_D',
-      name: 'Main-Thread / Discord Client Block',
+      name: 'CANVAS / GPU COMPOSITION',
+      category: 'Main Thread & Drawing',
+      heuristic: true,
       details: `LongTask: ${longestLongTaskMs}ms, Draw: ${canvasDrawMs}ms`,
     };
   }
 
-  // Case C: rAF Throttling / Cadence Drop
+  // Case C: rAF Throttling / Compositor Cadence Drop
   if (rafGapMs >= threshold + 10.0 && presentationQueueSize > 0) {
     return {
       code: 'CASE_C',
-      name: 'rAF Scheduling / Discord Viewport Throttling',
+      name: 'RAF / MAIN THREAD / COMPOSITOR',
+      category: 'rAF & Browser Compositor',
+      heuristic: true,
       details: `rAF Gap: ${rafGapMs}ms with ${presentationQueueSize} frames queued`,
     };
   }
@@ -240,24 +255,30 @@ export function classifyHitch({
   if (decodeGapMs >= threshold + 10.0 && decodeQueueSize > 1) {
     return {
       code: 'CASE_B',
-      name: 'Hardware Decoder Pipeline Delay',
+      name: 'DECODER / GPU DECODE',
+      category: 'Hardware VideoDecoder',
+      heuristic: true,
       details: `Decode Gap: ${decodeGapMs}ms, HW Queue: ${decodeQueueSize}`,
     };
   }
 
-  // Case A: Capture / Ingestion Delivery Gap
+  // Case A: Network / Ingestion Delivery Gap
   if (captureGapMs >= threshold) {
     return {
       code: 'CASE_A',
-      name: 'Host Ingestion / Network Delivery Starvation',
+      name: 'NETWORK / ACTIVITY PROXY',
+      category: 'Network & Capture Ingestion',
+      heuristic: true,
       details: `Source/Capture Gap: ${captureGapMs}ms`,
     };
   }
 
-  // Case E: Audio/Video Clock Drift / Adaptive Jitter Correction
+  // Case E: Player Clock / Adaptive Jitter Correction
   return {
     code: 'CASE_E',
-    name: 'Clock Drift / Adaptive Resync',
+    name: 'PLAYER CLOCK / SCHEDULER',
+    category: 'Scheduler & Clock Drift',
+    heuristic: true,
     details: `RenderGap: ${renderGapMs}ms (Pacing divergence)`,
   };
 }
@@ -335,6 +356,7 @@ export function createStutterDetector({
       else if (suspect.code === 'CASE_D') caseCounts.D++;
       else if (suspect.code === 'CASE_E') caseCounts.E++;
 
+      // Strict numeric snapshot — NO media buffers, NO secrets
       const snapshot = {
         timestamp: Date.now(),
         renderGapMs: Math.round(renderGapMs * 10) / 10,

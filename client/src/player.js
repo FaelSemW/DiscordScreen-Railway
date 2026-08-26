@@ -1,4 +1,8 @@
-import { createIntervalTracker, createValueTracker, createStutterDetector } from '../../shared/pacing-metrics.js';
+import {
+  createIntervalTracker,
+  createValueTracker,
+  createStutterDetector,
+} from '../../shared/pacing-metrics.js';
 import {
   getLatencyConfig,
   DEFAULT_LATENCY_MODE,
@@ -21,7 +25,7 @@ export function createPlayer(
   let currentLatencyMode = latencyMode;
   let latencyConfig = getLatencyConfig(latencyMode);
 
-  // Métricas de Ritmo (Frame Pacing) e Intervalos
+  // Métricas de Ritmo (Frame Pacing) e Intervalos — Telemetria Headless Bounding
   const receiveIntervalTracker = createIntervalTracker(120);
   const decodeIntervalTracker = createIntervalTracker(120);
   const renderIntervalTracker = createIntervalTracker(120);
@@ -34,7 +38,7 @@ export function createPlayer(
     maxHistory: 25,
   });
 
-  // Long Task Tracking via PerformanceObserver
+  // Long Task Tracking via PerformanceObserver (onde suportado)
   let longTasks10s = [];
   let longTaskObserver = null;
   if (typeof PerformanceObserver !== 'undefined') {
