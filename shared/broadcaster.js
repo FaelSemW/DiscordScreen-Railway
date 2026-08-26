@@ -1,5 +1,24 @@
 import { iceServers, criarPeer, ajustarEnvio, suportaWebRTC, MORTO } from './rtc.js';
 import { createIntervalTracker, createValueTracker } from './pacing-metrics.js';
+import {
+  QUALITY_PRESETS,
+  DEFAULT_PRESET,
+  validateQualityConfig,
+  RESOLUTION_OPTIONS,
+  FPS_OPTIONS,
+  MIN_BITRATE,
+  MAX_BITRATE,
+} from './quality-presets.js';
+
+export {
+  QUALITY_PRESETS,
+  DEFAULT_PRESET,
+  validateQualityConfig,
+  RESOLUTION_OPTIONS,
+  FPS_OPTIONS,
+  MIN_BITRATE,
+  MAX_BITRATE,
+};
 
 /**
  * Pipeline de transmissão: captura → codifica → envia.
@@ -124,61 +143,7 @@ const TIPO_AUDIO = 3;
 // ruído perto dos megabits do vídeo — não vale economizar aqui.
 const AUDIO_BITRATE = 96_000;
 
-// Presets de qualidade predefinidos
-export const QUALITY_PRESETS = {
-  automatico: {
-    id: 'automatico',
-    name: 'Automático',
-    description: 'Ajusta dinamicamente de acordo com o computador e a rede',
-    isAuto: true,
-  },
-  economia: {
-    id: 'economia',
-    name: 'Economia',
-    description: '720p • 30 FPS • 2.0 Mbps (PCs básicos e conexões lentas)',
-    width: 1280,
-    height: 720,
-    fps: 30,
-    bitrate: 2_000_000,
-    priority: 'estabilidade',
-  },
-  equilibrado: {
-    id: 'equilibrado',
-    name: 'Equilibrado',
-    description: '900p • 30 FPS • 4.0 Mbps (Uso geral recomendado)',
-    width: 1600,
-    height: 900,
-    fps: 30,
-    bitrate: 4_000_000,
-    priority: 'equilibrado',
-  },
-  alta: {
-    id: 'alta',
-    name: 'Alta',
-    description: '1080p • 30 FPS • 6.0 Mbps (Excelente leitura e nitidez)',
-    width: 1920,
-    height: 1080,
-    fps: 30,
-    bitrate: 6_000_000,
-    priority: 'qualidade',
-  },
-  maxima: {
-    id: 'maxima',
-    name: 'Máxima',
-    description: '1080p • 60 FPS • 8.0 Mbps (Máxima fluidez e fidelidade)',
-    width: 1920,
-    height: 1080,
-    fps: 60,
-    bitrate: 8_000_000,
-    priority: 'fluidez',
-  },
-  personalizado: {
-    id: 'personalizado',
-    name: 'Personalizado',
-    description: 'Configuração manual detalhada',
-    isCustom: true,
-  },
-};
+// Presets de qualidade são importados e re-exportados de ./quality-presets.js
 
 // Escada de adaptação com prioridade em FLUIDEZ (preserva 60 FPS o máximo possível)
 export const ADAPTIVE_LADDER_FLUIDEZ = [
@@ -283,7 +248,7 @@ const MAX_H = 1080;
 
 const even = (n) => Math.max(2, n - (n % 2));
 
-function fitWithin(w, h, maxW = MAX_W, maxH = MAX_H) {
+export function fitWithin(w, h, maxW = MAX_W, maxH = MAX_H) {
   const scale = Math.min(1, maxW / w, maxH / h);
   return { width: even(Math.round(w * scale)), height: even(Math.round(h * scale)) };
 }

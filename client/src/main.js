@@ -1,8 +1,12 @@
-import './style.css';
 import { DiscordSDK } from '@discord/embedded-app-sdk';
 import { createPlayer } from './player.js';
 import { createAudio } from './audio.js';
 import { createBroadcaster } from '../../shared/broadcaster.js';
+import {
+  QUALITY_PRESETS,
+  DEFAULT_PRESET,
+  validateQualityConfig,
+} from '../../shared/quality-presets.js';
 import {
   iceServers,
   criarPeer,
@@ -157,26 +161,6 @@ function updateDebugOverlay() {
 
   const s = activeSlot !== null ? streams.get(activeSlot) : [...streams.values()][0];
   if (!s || !s.player) {
-    if ($('dbg-buf-target-cur')) $('dbg-buf-target-cur').textContent = '1000 / 0 ms';
-    if ($('dbg-buf-min-max')) $('dbg-buf-min-max').textContent = '0 / 0 ms';
-    if ($('dbg-buf-state')) $('dbg-buf-state').textContent = 'BUILDING';
-    $('dbg-fps-rec').textContent = '0';
-    $('dbg-fps-dec').textContent = '0';
-    $('dbg-fps-ren').textContent = '0';
-    if ($('dbg-pace-rec')) $('dbg-pace-rec').textContent = '0 ms';
-    if ($('dbg-pace-ren')) $('dbg-pace-ren').textContent = '0 / 0 ms';
-    if ($('dbg-stutters')) $('dbg-stutters').textContent = '0 / 0';
-    if ($('dbg-stutter-last')) $('dbg-stutter-last').textContent = '—';
-    if ($('dbg-clock-source')) $('dbg-clock-source').textContent = '—';
-    if ($('dbg-buf-aud')) $('dbg-buf-aud').textContent = '0 ms';
-    if ($('dbg-underruns-aud')) $('dbg-underruns-aud').textContent = '0';
-    if ($('dbg-av-drift')) $('dbg-av-drift').textContent = '—';
-    if ($('dbg-lat-e2e')) $('dbg-lat-e2e').textContent = '0 ms';
-    if ($('dbg-q-presentation')) $('dbg-q-presentation').textContent = '0';
-    if ($('dbg-dropped')) $('dbg-dropped').textContent = '0 / 0';
-    $('dbg-res-native').textContent = '—';
-    $('dbg-res-css').textContent = '—';
-    $('dbg-mode-lat').textContent = `${currentLatencyMode.toUpperCase()} / ${currentFitMode}`;
     return;
   }
 
@@ -185,70 +169,126 @@ function updateDebugOverlay() {
   const p = m.pacing;
   const b = m.playbackBuffer;
 
-  if ($('dbg-buf-target-cur'))
-    $('dbg-buf-target-cur').textContent = `${b?.targetMs || 1000} / ${b?.currentMs || 0} ms`;
-  if ($('dbg-buf-min-max'))
-    $('dbg-buf-min-max').textContent = `${b?.min10s || 0} / ${b?.max10s || 0} ms`;
-  if ($('dbg-buf-state')) $('dbg-buf-state').textContent = `${b?.state || 'BUILDING'}`;
-
   const statusBadge = $('dbg-stream-status');
   if (statusBadge) {
     if (b?.state === 'LOW') {
-      statusBadge.textContent = 'Buffer baixo (ajustando)';
+      statusBadge.textContent = 'Buffer Baixo';
       statusBadge.style.background = 'rgba(234, 179, 8, 0.2)';
       statusBadge.style.color = '#facc15';
     } else if (b?.state === 'RECOVERING') {
-      statusBadge.textContent = 'Adaptando buffer contra jitter';
+      statusBadge.textContent = 'Adaptando';
       statusBadge.style.background = 'rgba(234, 179, 8, 0.2)';
       statusBadge.style.color = '#facc15';
     } else {
-      statusBadge.textContent = 'Transmissão estável';
+      statusBadge.textContent = 'Estável';
       statusBadge.style.background = 'rgba(34, 197, 94, 0.2)';
       statusBadge.style.color = '#4ade80';
     }
   }
 
-  $('dbg-fps-rec').textContent = `${m.receiveFps}`;
-  $('dbg-fps-dec').textContent = `${m.decodeFps}`;
-  $('dbg-fps-ren').textContent = `${m.renderFps}`;
+  // 1. Rede
+  if ($('dbg-net-pkts'))
+    $('dbg-net-pkts').textContent = `${m.network?.receiveFps || 0} v / ${s.audio ? 'opus' : '0'} fps`;
+  if ($('dbg-net-p50-p95-p99'))
+    $('dbg-net-p50-p95-p99').textContent = `${m.network?.p50 || 0} / ${m.network?.p95 || 0} / ${m.network?.p99 || 0} ms`;
+  if ($('dbg-net-max-gap'))
+    $('dbg-net-max-gap').textContent = `${m.network?.maxGap || 0} ms (jit: ${m.network?.jitter || 0}ms)`;
+  if ($('dbg-net-transport'))
+    $('dbg-net-transport').textContent = inDiscord ? 'WebSocket (Discord Proxy)' : (s.viaRtc ? 'WebRTC (Direto)' : 'WebSocket (Relay)');
 
-  if ($('dbg-pace-rec'))
-    $('dbg-pace-rec').textContent =
-      `${p?.receiveInterval?.p95 || 0} ms (méd: ${p?.receiveInterval?.avg || 0}ms)`;
-  if ($('dbg-pace-ren'))
-    $('dbg-pace-ren').textContent =
-      `${p?.renderInterval?.p95 || 0} / ${p?.renderInterval?.max || 0} ms`;
-  if ($('dbg-stutters'))
-    $('dbg-stutters').textContent =
-      `${p?.stutter?.windowCandidateStutters || 0} / ${p?.stutter?.windowSevereStutters || 0}`;
-  if ($('dbg-stutter-last')) {
-    const snap = p?.stutter?.latestSnapshot;
-    $('dbg-stutter-last').textContent = snap
-      ? `${snap.renderGapMs}ms (cap: ${snap.captureGapMs ?? '?'}ms, rec: ${snap.receiveGapMs ?? '?'}ms${snap.isKeyframe ? ', KEY' : ''})`
-      : 'Nenhum';
+  // 2. Decoder
+  if ($('dbg-dec-chunks'))
+    $('dbg-dec-chunks').textContent = `${m.decoder?.chunksSubmittedSec || 0}/s · HW Q: ${m.decoder?.decodeQueueSize || 0}`;
+  if ($('dbg-dec-fps'))
+    $('dbg-dec-fps').textContent = `${m.decoder?.decodeFps || 0} fps`;
+  if ($('dbg-dec-p50-p95-p99'))
+    $('dbg-dec-p50-p95-p99').textContent = `${m.decoder?.p50 || 0} / ${m.decoder?.p95 || 0} / ${m.decoder?.p99 || 0} ms`;
+  if ($('dbg-dec-max-gap'))
+    $('dbg-dec-max-gap').textContent = `${m.decoder?.maxGap || 0} ms`;
+  if ($('dbg-dec-reconfig-err'))
+    $('dbg-dec-reconfig-err').textContent = `${m.decoder?.reconfigures || 0} rec / ${m.decoder?.errors || 0} err`;
+
+  // 3. Apresentação
+  if ($('dbg-pres-q'))
+    $('dbg-pres-q').textContent = `${m.presentation?.queuedFrames || 0} quadros (Live: ${m.videoFrameLifetime?.currentlyLive || 0})`;
+  if ($('dbg-pres-fps'))
+    $('dbg-pres-fps').textContent = `${m.presentation?.renderFps || 0} fps`;
+  if ($('dbg-pres-p50-p95-p99'))
+    $('dbg-pres-p50-p95-p99').textContent = `${m.presentation?.p50 || 0} / ${m.presentation?.p95 || 0} / ${m.presentation?.p99 || 0} ms`;
+  if ($('dbg-pres-max-gap'))
+    $('dbg-pres-max-gap').textContent = `${m.presentation?.maxGap || 0} ms`;
+  if ($('dbg-pres-drops'))
+    $('dbg-pres-drops').textContent = `${m.presentation?.droppedLate || 0} atraso / ${m.presentation?.droppedRecovery || 0} rec`;
+  if ($('dbg-pres-drift-lat'))
+    $('dbg-pres-drift-lat').textContent = `${m.presentation?.avDriftMs || 0} ms / ${m.streamLatency?.estimatedEndToEndMs || 0} ms`;
+  if ($('dbg-pres-resync'))
+    $('dbg-pres-resync').textContent = `${m.presentation?.hardResyncCount || 0} hard / ${m.presentation?.softCorrectionCount || 0} soft`;
+
+  // 4. rAF & Contexto
+  if ($('dbg-raf-fps'))
+    $('dbg-raf-fps').textContent = `${m.raf?.rafFps || 0} Hz`;
+  if ($('dbg-raf-p50-p95-p99'))
+    $('dbg-raf-p50-p95-p99').textContent = `${m.raf?.p50 || 0} / ${m.raf?.p95 || 0} / ${m.raf?.p99 || 0} ms`;
+  if ($('dbg-raf-max-gap'))
+    $('dbg-raf-max-gap').textContent = `${m.raf?.maxGap || 0} ms`;
+  if ($('dbg-raf-context'))
+    $('dbg-raf-context').textContent = `${m.raf?.visibilityState || 'visible'} · ${m.raf?.hasFocus ? 'focado' : 'sem foco'}`;
+
+  // 5. Main Thread & Canvas
+  if ($('dbg-mt-tasks10s'))
+    $('dbg-mt-tasks10s').textContent = `${m.mainThread?.longTasks10s || 0} (Max: ${m.mainThread?.longestTaskMs || 0}ms)`;
+  if ($('dbg-canvas-draw'))
+    $('dbg-canvas-draw').textContent = `${m.canvas?.drawAvgMs || 0} / ${m.canvas?.drawP95Ms || 0} / ${m.canvas?.drawMaxMs || 0} ms`;
+  if ($('dbg-canvas-res'))
+    $('dbg-canvas-res').textContent = `${m.canvas?.backingRes || '—'} / ${m.canvas?.cssRes || '—'}`;
+  if ($('dbg-canvas-dpr-vp'))
+    $('dbg-canvas-dpr-vp').textContent = `DPR: ${m.canvas?.dpr || 1} · View: ${m.canvas?.viewport || '—'}`;
+
+  // 6. Stutters & Classificador
+  const st = p?.stutter;
+  if ($('dbg-stutter-counts')) {
+    const c = st?.countsByCategory || {};
+    $('dbg-stutter-counts').textContent = `A:${c['CASE A'] || 0} B:${c['CASE B'] || 0} C:${c['CASE C'] || 0} D:${c['CASE D'] || 0} E:${c['CASE E'] || 0}`;
   }
 
-  if ($('dbg-clock-source'))
-    $('dbg-clock-source').textContent = m.clockSource || (a?.active ? 'AUDIO' : 'VIDEO');
-  if ($('dbg-buf-aud'))
-    $('dbg-buf-aud').textContent = a?.active ? `${Math.round(a.bufferAheadMs)} ms` : '0 ms';
-  if ($('dbg-underruns-aud')) $('dbg-underruns-aud').textContent = String(a?.underrunCount ?? 0);
-  if ($('dbg-av-drift')) $('dbg-av-drift').textContent = a?.active ? `${m.avDriftMs} ms` : 'N/A';
+  if ($('dbg-stutter-latest')) {
+    const snap = st?.latestSnapshot;
+    if (!snap) {
+      $('dbg-stutter-latest').textContent = 'Nenhum engasgo recente detectado.';
+    } else {
+      $('dbg-stutter-latest').innerHTML = `
+        <span class="stutter-tag ${snap.classification?.category.toLowerCase().replace(' ', '-')}">[${snap.classification?.category}] ${snap.classification?.name}</span>
+        <div class="stutter-detail">${snap.classification?.description}</div>
+        <div class="stutter-meta">Gap: <b>${snap.renderGapMs}ms</b> (rAF: ${snap.rafGapMs || '?'}ms, Dec: ${snap.decodeGapMs || '?'}ms, Rec: ${snap.receiveGapMs || '?'}ms, Draw: ${snap.canvasDrawMs || '?'}ms) às ${snap.timeFormatted}</div>
+      `;
+    }
+  }
+}
 
-  if ($('dbg-lat-e2e'))
-    $('dbg-lat-e2e').textContent =
-      `${m.streamLatency?.estimatedEndToEndMs ?? Math.round(m.videoLagMs + (b?.currentMs || 0))} ms`;
-  if ($('dbg-q-presentation'))
-    $('dbg-q-presentation').textContent = String(
-      m.video?.queuedFrames ?? m.presentationQueueSize ?? 0,
-    );
-  if ($('dbg-dropped'))
-    $('dbg-dropped').textContent =
-      `${m.video?.droppedLate ?? m.droppedLate ?? 0} atraso / ${m.video?.droppedRecovery ?? m.droppedRecovery ?? 0} rec`;
+function copyStutterLog() {
+  const s = activeSlot !== null ? streams.get(activeSlot) : [...streams.values()][0];
+  const metrics = s?.player?.getMetrics() || {};
+  const report = {
+    capturedAt: new Date().toISOString(),
+    inDiscord,
+    userAgent: navigator.userAgent,
+    devicePixelRatio: window.devicePixelRatio,
+    viewport: `${window.innerWidth}x${window.innerHeight}`,
+    activeSlot,
+    metrics,
+    recentStutterEvents: window.__STUTTER_EVENTS || [],
+  };
 
-  $('dbg-res-native').textContent = m.sizes?.video || '—';
-  $('dbg-res-css').textContent = m.sizes?.box || '—';
-  $('dbg-mode-lat').textContent = `${currentLatencyMode.toUpperCase()} / ${currentFitMode}`;
+  const json = JSON.stringify(report, null, 2);
+  navigator.clipboard.writeText(json).then(() => {
+    toast('Relatório forense copiado para a área de transferência!');
+  }).catch(() => {
+    console.log('[DIAGNOSTIC_REPORT_JSON]', json);
+    toast('Relatório impresso no console (copie pelo F12)');
+  });
+}
+if (typeof window !== 'undefined') {
+  window.copyStutterLog = copyStutterLog;
 }
 
 // ------------------------------------------------------------------- helpers
@@ -1402,12 +1442,6 @@ function ensureStatsTimer() {
  * separa "está travando" de "está travando por causa disto".
  */
 window.addEventListener('keydown', (e) => {
-  // Ctrl + Shift + D (ou Cmd + Shift + D) copia o log de diagnóstico sem abrir nenhum painel
-  if ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'D' || e.key === 'd')) {
-    e.preventDefault();
-    copyStutterLog();
-    return;
-  }
   if (!e.ctrlKey || !e.shiftKey || e.code !== 'KeyD') return;
   e.preventDefault();
   const painel = $('panel');
@@ -2050,7 +2084,7 @@ function connect() {
       if (ws?.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: 'ping', timestamp: Date.now() }));
       }
-    }, 10_000);
+    }, 20_000);
 
     // O apelido é do cliente, então precisa ser reenviado a cada conexão —
     // inclusive nas reconexões, senão o nome volta ao do Discord sozinho.
@@ -2231,123 +2265,185 @@ function abaAberta() {
 }
 
 /**
- * As opções da próxima transmissão, editadas pela engrenagem.
- *
- * Ficam no localStorage porque são preferência de quem transmite, não estado da
- * sala: quem escolheu 5 Mb/s uma vez não quer reescolher a cada abertura. E
- * ficam aqui, e não num modal que aparece antes de cada início, porque decidir
- * qualidade toda vez que se quer mostrar a tela é atrito no caminho curto.
+ * As opções da próxima transmissão, salvas no localStorage.
  */
-const AJUSTES_PADRAO = { bitrate: 2500000, fps: 30 };
+const QUALITY_STORAGE_KEY = 'stream_quality_preset';
+const CUSTOM_STORAGE_KEY = 'stream_quality_custom';
 
-let ajustes = (() => {
+let savedPreset = read(QUALITY_STORAGE_KEY) || DEFAULT_PRESET;
+let savedCustom = (() => {
   try {
-    return { ...AJUSTES_PADRAO, ...JSON.parse(read('ajustes') ?? '{}') };
+    return JSON.parse(read(CUSTOM_STORAGE_KEY) ?? '{}');
   } catch {
-    return { ...AJUSTES_PADRAO };
+    return {};
   }
 })();
 
+function getQualityConfig() {
+  const presetKey = read(QUALITY_STORAGE_KEY) || DEFAULT_PRESET;
+  if (presetKey === 'personalizado') {
+    return validateQualityConfig({
+      preset: 'personalizado',
+      resolution: savedCustom.resolution || '900p',
+      fps: savedCustom.fps || 30,
+      bitrate: savedCustom.bitrate || 4_000_000,
+    });
+  }
+  return validateQualityConfig({ preset: presetKey });
+}
+
+let pendingQualityResolve = null;
+
+function pedirQualidade(fonte = 'tela') {
+  return new Promise((resolve) => {
+    pendingQualityResolve = resolve;
+
+    const presetKey = read(QUALITY_STORAGE_KEY) || DEFAULT_PRESET;
+    const cards = document.querySelectorAll('.quality-card');
+    cards.forEach((c) => {
+      const radio = c.querySelector('input[type="radio"]');
+      const isSelected = c.dataset.preset === presetKey;
+      if (radio) radio.checked = isSelected;
+      c.classList.toggle('selected', isSelected);
+    });
+
+    if ($('customQualityFields')) {
+      $('customQualityFields').hidden = presetKey !== 'personalizado';
+      if (savedCustom.resolution && $('customRes')) $('customRes').value = savedCustom.resolution;
+      if (savedCustom.fps && $('customFps')) $('customFps').value = String(savedCustom.fps);
+      if (savedCustom.bitrate && $('customBitrate')) $('customBitrate').value = String(savedCustom.bitrate);
+    }
+
+    if ($('qualityModal')) $('qualityModal').hidden = false;
+  });
+}
+
+function fecharModalQualidade(confirmed = false) {
+  if ($('qualityModal')) $('qualityModal').hidden = true;
+  if (!confirmed) {
+    if (pendingQualityResolve) {
+      pendingQualityResolve(null);
+      pendingQualityResolve = null;
+    }
+    return;
+  }
+
+  const selectedRadio = document.querySelector('input[name="stream_quality"]:checked');
+  const presetKey = selectedRadio?.value || DEFAULT_PRESET;
+  store(QUALITY_STORAGE_KEY, presetKey);
+
+  let qualityConfig = { preset: presetKey };
+  if (presetKey === 'personalizado') {
+    const customConfig = {
+      preset: 'personalizado',
+      resolution: $('customRes')?.value || '900p',
+      fps: Number($('customFps')?.value) || 30,
+      bitrate: Number($('customBitrate')?.value) || 4_000_000,
+    };
+    savedCustom = customConfig;
+    store(CUSTOM_STORAGE_KEY, JSON.stringify(customConfig));
+    qualityConfig = customConfig;
+  }
+
+  const validated = validateQualityConfig(qualityConfig);
+  if (pendingQualityResolve) {
+    pendingQualityResolve(validated);
+    pendingQualityResolve = null;
+  }
+}
+
+document.querySelectorAll('.quality-card').forEach((card) => {
+  card.addEventListener('click', () => {
+    const radio = card.querySelector('input[type="radio"]');
+    if (radio) radio.checked = true;
+    document.querySelectorAll('.quality-card').forEach((c) => {
+      c.classList.toggle('selected', c === card);
+    });
+    if ($('customQualityFields')) {
+      $('customQualityFields').hidden = card.dataset.preset !== 'personalizado';
+    }
+  });
+});
+
+$('qualityCancel')?.addEventListener('click', () => fecharModalQualidade(false));
+$('qualityGo')?.addEventListener('click', () => fecharModalQualidade(true));
+$('qualityModal')?.addEventListener('click', (e) => {
+  if (e.target === $('qualityModal')) fecharModalQualidade(false);
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && $('qualityModal') && !$('qualityModal').hidden) {
+    fecharModalQualidade(false);
+  } else if (e.key === 'Enter' && $('qualityModal') && !$('qualityModal').hidden) {
+    fecharModalQualidade(true);
+  }
+});
+
 /**
  * As opções no formato que a página de captura lê da URL.
- *
- * O som não vem aqui: a tela sempre o pede e a câmera nunca, então quem decide
- * é a caixa "Compartilhar o áudio" do seletor do navegador — que já é uma
- * escolha. Repetir a pergunta aqui só criava um jeito de a captura ir muda sem
- * querer, e a câmera não leva o microfone porque a voz já anda pela call.
  */
-function opcoesDaFonte() {
+function opcoesDaFonte(quality = null) {
+  const q = quality || getQualityConfig();
   return {
-    q: String(ajustes.bitrate),
-    fps: String(ajustes.fps),
+    preset: q.preset,
+    q: String(q.bitrate),
+    fps: String(q.fps),
   };
 }
 
-/**
- * Liga uma fonte pelo caminho mais curto que existir para ela.
- *
- * Com uma aba já aberta, o pedido vai por ela em vez de abrir outra: seriam
- * duas janelas para a pessoa manter vivas, e a que existe já faz as duas
- * coisas. A aba resolve o que dá — câmera ela liga sozinha, tela precisa do
- * clique lá, porque getDisplayMedia exige gesto do usuário.
- */
 /** Nome da aba de captura, para reencontrá-la em vez de empilhar outra. */
 const JANELA_CAPTURA = 'discord-screen-captura';
 
-function ligarFonte(fonte) {
-  if (abaAberta()) return trazerAba(fonte);
-  abrirCaptura(fonte);
+function ligarFonte(fonte, quality = null) {
+  const q = quality || getQualityConfig();
+  if (abaAberta()) return trazerAba(fonte, q);
+  abrirCaptura(fonte, q);
 }
 
-/**
- * A aba de captura já existe: leva a pessoa até ela.
- *
- * O pedido pelo WebSocket sozinho não resolvia. Ele chega, a aba atende — mas
- * em segundo plano, onde ninguém vê, e uma aba não consegue se trazer para a
- * frente. Avisar por toast que ela existe deixava a pessoa procurando entre as
- * janelas qual era.
- */
-function trazerAba(fonte) {
-  // Dentro do Discord a aba foi parar no navegador do sistema, que é outro
-  // processo: daqui não há como focá-la. Abrir de novo é o que existe, e a
-  // fonte vai na URL, então a aba nova já nasce no que se pediu. Se a antiga
-  // continuar aberta, ficam duas — é o preço da fronteira entre os processos.
-  if (inDiscord) return abrirLink(fonte);
+function trazerAba(fonte, quality = null) {
+  if (inDiscord) return abrirLink(fonte, quality);
 
-  // Fora do Discord a aba é nossa, e o nome fixo a encontra. String vazia de
-  // propósito: passar a URL faria o navegador *navegar* nela, e navegar é
-  // recarregar — mataria a transmissão que estiver no ar ali dentro.
   const aba = window.open('', JANELA_CAPTURA);
-  if (!aba) return abrirLink(fonte);
+  if (!aba) return abrirLink(fonte, quality);
 
-  // `window.open('')` num nome que não existe cria uma aba em branco em vez de
-  // achar alguma. Aí ela precisa ser levada para o lugar certo.
   let emBranco = false;
   try {
     emBranco = aba.location.href === 'about:blank';
-  } catch {
-    /* já navegou para outra origem: é a aba de captura mesmo */
-  }
+  } catch {}
   if (emBranco) {
-    aba.location.href = urlDaCaptura(fonte).toString();
+    aba.location.href = urlDaCaptura(fonte, quality).toString();
     aba.focus();
     return;
   }
 
   aba.focus();
-  // A URL não mudou, então o pedido tem de ir por fora dela. As opções vão
-  // junto: a aba pode estar aberta desde antes da última mexida na engrenagem.
-  ws?.send(JSON.stringify({ type: 'start-broadcast', fonte, opcoes: opcoesDaFonte() }));
+  ws?.send(JSON.stringify({ type: 'start-broadcast', fonte, opcoes: opcoesDaFonte(quality) }));
 }
 
-async function abrirCaptura(fonte) {
+async function abrirCaptura(fonte, quality = null) {
   if (!roomTokens) return;
 
-  // Só a tela tem chance de nascer aqui dentro; o Discord anula o getUserMedia
-  // no iframe, então a câmera vai direto para a aba.
-  if (fonte === 'tela' && (await broadcastFromHere())) return;
+  if (fonte === 'tela' && (await broadcastFromHere(quality))) return;
 
-  abrirLink(fonte);
+  abrirLink(fonte, quality);
 }
 
-/** O endereço da página de captura, já com as opções e a fonte pedida. */
-function urlDaCaptura(fonte) {
+function urlDaCaptura(fonte, quality = null) {
+  const q = quality || getQualityConfig();
   const url = new URL(roomTokens.shareUrl);
-  for (const [chave, valor] of Object.entries(opcoesDaFonte())) {
-    url.searchParams.set(chave, valor);
-  }
+  url.searchParams.set('preset', q.preset);
+  url.searchParams.set('q', String(q.bitrate));
+  url.searchParams.set('fps', String(q.fps));
   url.searchParams.set('fonte', fonte);
   return url;
 }
 
-async function abrirLink(fonte) {
+async function abrirLink(fonte, quality = null) {
   if (!roomTokens) return;
-  const url = urlDaCaptura(fonte).toString();
+  const url = urlDaCaptura(fonte, quality).toString();
 
   if (inDiscord) {
     try {
       const res = await sdk.commands.openExternalLink({ url });
-      // Clientes antigos devolvem null; só tratamos false como recusa explícita.
       if (res?.opened === false) {
         toast('Você recusou abrir o link. Sem isso não dá para capturar a tela.', true);
       }
@@ -2362,12 +2458,6 @@ async function abrirLink(fonte) {
 
 /**
  * A origem pública do site, ou null quando o servidor não a conhece.
- *
- * Ela só chega ao cliente dentro do shareUrl. Sem PUBLIC_ORIGIN configurado o
- * servidor emite um caminho relativo, e aí não existe endereço externo a
- * oferecer: dentro do Discord, location.origin é o proxy da atividade, que não
- * abre por fora. Devolver null é o que faz o botão sumir em vez de levar a
- * pessoa a um link quebrado.
  */
 function origemDoSite() {
   try {
@@ -2377,16 +2467,6 @@ function origemDoSite() {
   }
 }
 
-/**
- * O endereço desta sala no site, com o ingresso de quem já está aqui.
- *
- * Leva junto a tela em que a pessoa estava: abrir o site na sala certa mas na
- * transmissão errada seria fazer ela procurar de novo o que já estava vendo.
- *
- * A tela cheia vai sempre, e não só quando já estava ligada aqui: sair da
- * atividade é o pedido por mais espaço, e é o que este botão existe para
- * atender.
- */
 function urlDoSite(origem) {
   const url = new URL(origem);
   url.searchParams.set('t', roomTokens.viewerToken);
@@ -2409,7 +2489,6 @@ async function abrirNoSite() {
 
   try {
     const res = await sdk.commands.openExternalLink({ url });
-    // Clientes antigos devolvem null; só false é recusa explícita.
     if (res?.opened === false) toast('Você recusou abrir o link.', true);
   } catch (err) {
     toast(`Não foi possível abrir o link: ${err.message}`, true);
@@ -2418,28 +2497,17 @@ async function abrirNoSite() {
 
 $('watchSite').addEventListener('click', abrirNoSite);
 
-/**
- * Encerra a minha transmissão, tenha ela nascido aqui ou na aba externa.
- *
- * Funil único de propósito: parar pelo botão, sair da sala e a sala fechar
- * precisam encerrar do mesmo jeito. Deixar a captura viva depois de sair é
- * vazamento de tela, não detalhe de interface — e a aba externa tem conexão
- * própria, então só o servidor consegue mandá-la parar.
- */
 function stopMyBroadcast(fonte = null) {
-  // O myBroadcast é sempre a tela: é a única fonte que a atividade consegue
-  // capturar por conta própria.
   if (!fonte || fonte === 'tela') {
     myBroadcast?.stop();
     myBroadcast = null;
   }
   if (participants.some((p) => p.broadcasting && p.id === session?.user?.id)) {
-    // Sem fonte o servidor derruba tudo — que é o certo para sair da sala.
     ws?.send(JSON.stringify({ type: 'stop-broadcast', ...(fonte ? { fonte } : {}) }));
   }
 }
 
-$('share').addEventListener('click', () => {
+$('share').addEventListener('click', async () => {
   if (!session) return;
 
   if (minhasFontes().has('tela') || myBroadcast) {
@@ -2448,7 +2516,10 @@ $('share').addEventListener('click', () => {
     return;
   }
 
-  ligarFonte('tela');
+  const quality = await pedirQualidade('tela');
+  if (!quality) return; // Usuário cancelou no modal de qualidade
+
+  ligarFonte('tela', quality);
 });
 
 $('camera').addEventListener('click', () => {
@@ -2463,7 +2534,6 @@ $('camera').addEventListener('click', () => {
   ligarFonte('camera');
 });
 
-/** Espelha o volume atual no botão e no cursor, sem tocar no áudio. */
 function renderVolume() {
   const pct = Math.round(volume * 100);
   $('volume').value = String(pct);
@@ -2481,28 +2551,14 @@ function setVolume(valor) {
   volume = Math.min(1, Math.max(0, valor));
   if (volume > 0) volumeAntes = volume;
   store('volume', String(volume));
-  // O geral mudou: cada stream recalcula, porque o dele é o produto dos dois.
   for (const slot of streams.keys()) aplicarVolume(slot);
   renderVolume();
 }
 
-// Clique no alto-falante silencia e devolve; o cursor ajusta no meio termo.
 $('mute').addEventListener('click', () => setVolume(volume === 0 ? volumeAntes : 0));
 $('volume').addEventListener('input', (e) => setVolume(Number(e.target.value) / 100));
 
-/**
- * Transmite a partir daqui mesmo, sem abrir aba.
- *
- * Só funciona se o Discord conceder `display-capture` ao iframe da Activity.
- * Retorna true quando o fluxo foi resolvido — transmitindo, ou a pessoa
- * cancelou o seletor — e false quando resta cair para a aba externa.
- *
- * NotAllowedError é ambíguo: vale tanto para "a plataforma bloqueou" quanto
- * para "a pessoa cancelou". O tempo separa os dois — bloqueio de política falha
- * na hora, sem nunca desenhar o seletor, enquanto cancelar exige que alguém
- * tenha visto a janela e clicado.
- */
-async function broadcastFromHere() {
+async function broadcastFromHere(quality = null) {
   if (!navigator.mediaDevices?.getDisplayMedia || !window.VideoEncoder) return false;
 
   if (!roomTokens) return false;
@@ -2510,12 +2566,15 @@ async function broadcastFromHere() {
   if (!shareToken) return false;
 
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const q = quality || getQualityConfig();
 
   const b = createBroadcaster({
     wsUrl: `${proto}://${location.host}${P}/ws?t=${encodeURIComponent(shareToken)}`,
     apiBase: P,
-    bitrate: ajustes.bitrate,
-    fps: ajustes.fps,
+    preset: q.preset,
+    bitrate: q.bitrate,
+    fps: q.fps,
+    priority: q.priority,
     audio: true,
     onAviso: (m) => toast(m, true),
     onEnd: () => {
@@ -2668,6 +2727,7 @@ $('latencySelect')?.addEventListener('change', (e) => applyLatencyMode(e.target.
 // Alternar Debug Overlay HUD
 $('statsToggle')?.addEventListener('click', toggleDebugOverlay);
 $('debugClose')?.addEventListener('click', toggleDebugOverlay);
+$('btnCopyDiagnostics')?.addEventListener('click', copyStutterLog);
 
 // Tela cheia com fallback gracioso para maximização no iframe da Activity
 $('fullscreen')?.addEventListener('click', async () => {
@@ -2756,78 +2816,3 @@ $('probe')?.addEventListener('click', async () => {
     toast(`Bloqueado (${err.name}): ${err.message}`, true);
   }
 });
-
-function getStutterLog() {
-  const s = activeSlot !== null ? streams.get(activeSlot) : [...streams.values()][0];
-  const m = s?.player ? s.player.getMetrics() : null;
-  const a = s?.audio?.getAudioClock() ?? null;
-
-  return {
-    capturedAt: new Date().toISOString(),
-    inDiscord,
-    userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'headless',
-    devicePixelRatio: typeof window !== 'undefined' ? window.devicePixelRatio || 1 : 1,
-    viewport: typeof window !== 'undefined' ? `${window.innerWidth}×${window.innerHeight}` : '1920×1080',
-    activeSlot,
-    availableSlots: [...available.keys()],
-    streamActive: Boolean(s && s.player),
-    metrics: m,
-    audioClock: a
-      ? {
-          active: a.active,
-          bufferAheadMs: Math.round(a.bufferAheadMs),
-          underrunCount: a.underrunCount,
-        }
-      : null,
-    recentStutterEvents: m?.stutterEvents || [],
-  };
-}
-
-function copyStutterLog() {
-  const log = getStutterLog();
-  const text = JSON.stringify(log, null, 2);
-
-  if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(text).then(() => {
-      toast('Relatório de diagnóstico copiado para a área de transferência!');
-    }).catch(() => {
-      if (typeof prompt !== 'undefined') {
-        prompt('Copie o relatório JSON abaixo:', text);
-      } else {
-        console.log('[DIAGNOSTIC_REPORT_JSON]', text);
-      }
-    });
-  } else if (typeof prompt !== 'undefined') {
-    prompt('Copie o relatório JSON abaixo:', text);
-  } else {
-    console.log('[DIAGNOSTIC_REPORT_JSON]', text);
-  }
-  return log;
-}
-
-if (typeof window !== 'undefined') {
-  window.getStutterLog = getStutterLog;
-  window.copyStutterLog = copyStutterLog;
-}
-
-function onPageWake() {
-  if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
-    if (!ws || ws.readyState !== WebSocket.OPEN) {
-      if (roomTokens && !abriu) {
-        connect();
-      }
-    } else {
-      try {
-        ws.send(JSON.stringify({ type: 'ping', timestamp: Date.now() }));
-      } catch {}
-    }
-  }
-}
-if (typeof document !== 'undefined') {
-  document.addEventListener('visibilitychange', onPageWake);
-}
-if (typeof window !== 'undefined') {
-  window.addEventListener('pageshow', onPageWake);
-  window.addEventListener('online', onPageWake);
-  window.addEventListener('focus', onPageWake);
-}
