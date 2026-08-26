@@ -1,3 +1,4 @@
+import './style.css';
 import { DiscordSDK } from '@discord/embedded-app-sdk';
 import { createPlayer } from './player.js';
 import { createAudio } from './audio.js';

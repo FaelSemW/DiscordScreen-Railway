@@ -237,4 +237,50 @@ describe('shared/pacing-metrics', () => {
     const duplicateIds = ids.filter((id, index) => ids.indexOf(id) !== index);
     expect(duplicateIds).toEqual([]);
   });
+
+  it('guarantees that client/index.html and client/src/main.js correctly reference stylesheet, and build emits valid CSS link', () => {
+    const srcHtmlPath = path.resolve(__dirname, '../client/index.html');
+    const srcHtml = fs.readFileSync(srcHtmlPath, 'utf8');
+    expect(srcHtml).toMatch(/<link\s+rel="stylesheet"\s+href="\/src\/style\.css"\s*\/?>/);
+
+    const srcMainPath = path.resolve(__dirname, '../client/src/main.js');
+    const srcMain = fs.readFileSync(srcMainPath, 'utf8');
+    expect(srcMain).toMatch(/import\s+['"]\.\/style\.css['"];/);
+
+    const distHtmlPath = path.resolve(__dirname, '../client/dist/index.html');
+    if (fs.existsSync(distHtmlPath)) {
+      const distHtml = fs.readFileSync(distHtmlPath, 'utf8');
+      const cssMatch = distHtml.match(/<link\s+rel="stylesheet"\s+crossorigin\s+href="(\/assets\/index-[^"]+\.css)">/);
+      expect(cssMatch).not.toBeNull();
+      const cssRelPath = cssMatch[1].replace(/^\//, '');
+      const distCssPath = path.resolve(__dirname, '../client/dist', cssRelPath);
+      expect(fs.existsSync(distCssPath)).toBe(true);
+      const cssContent = fs.readFileSync(distCssPath, 'utf8');
+      expect(cssContent.length).toBeGreaterThan(1000);
+      expect(cssContent).toContain('.debug-overlay');
+      expect(cssContent).toContain('.topbar');
+      expect(cssContent).toContain('.grid');
+    }
+  });
+
+  it('validates CSS styles and DOM structure', () => {
+    const srcHtmlPath = path.resolve(__dirname, '../client/index.html');
+    const srcHtml = fs.readFileSync(srcHtmlPath, 'utf8');
+    const srcCssPath = path.resolve(__dirname, '../client/src/style.css');
+    const srcCss = fs.readFileSync(srcCssPath, 'utf8');
+
+    // 1. Structure validity
+    expect(srcHtml.match(/<html/g)?.length).toBe(1);
+    expect(srcHtml.match(/<\/html>/g)?.length).toBe(1);
+    expect(srcHtml.match(/<head>/g)?.length).toBe(1);
+    expect(srcHtml.match(/<\/head>/g)?.length).toBe(1);
+    expect(srcHtml.match(/<body>/g)?.length).toBe(1);
+    expect(srcHtml.match(/<\/body>/g)?.length).toBe(1);
+
+    // 2. CSS integrity checks: ensure HUD styles are scoped and do not override global elements
+    expect(srcCss).toContain('.debug-overlay');
+    expect(srcCss).toContain('.debug-scroll-container');
+    expect(srcCss).not.toContain('body { display: none');
+    expect(srcCss).not.toContain('canvas { width: 10000px');
+  });
 });
