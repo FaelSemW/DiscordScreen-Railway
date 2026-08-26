@@ -156,6 +156,26 @@ function updateDebugOverlay() {
 
   const s = activeSlot !== null ? streams.get(activeSlot) : [...streams.values()][0];
   if (!s || !s.player) {
+    if ($('dbg-buf-target-cur')) $('dbg-buf-target-cur').textContent = '1000 / 0 ms';
+    if ($('dbg-buf-min-max')) $('dbg-buf-min-max').textContent = '0 / 0 ms';
+    if ($('dbg-buf-state')) $('dbg-buf-state').textContent = 'BUILDING';
+    $('dbg-fps-rec').textContent = '0';
+    $('dbg-fps-dec').textContent = '0';
+    $('dbg-fps-ren').textContent = '0';
+    if ($('dbg-pace-rec')) $('dbg-pace-rec').textContent = '0 ms';
+    if ($('dbg-pace-ren')) $('dbg-pace-ren').textContent = '0 / 0 ms';
+    if ($('dbg-stutters')) $('dbg-stutters').textContent = '0 / 0';
+    if ($('dbg-stutter-last')) $('dbg-stutter-last').textContent = '—';
+    if ($('dbg-clock-source')) $('dbg-clock-source').textContent = '—';
+    if ($('dbg-buf-aud')) $('dbg-buf-aud').textContent = '0 ms';
+    if ($('dbg-underruns-aud')) $('dbg-underruns-aud').textContent = '0';
+    if ($('dbg-av-drift')) $('dbg-av-drift').textContent = '—';
+    if ($('dbg-lat-e2e')) $('dbg-lat-e2e').textContent = '0 ms';
+    if ($('dbg-q-presentation')) $('dbg-q-presentation').textContent = '0';
+    if ($('dbg-dropped')) $('dbg-dropped').textContent = '0 / 0';
+    $('dbg-res-native').textContent = '—';
+    $('dbg-res-css').textContent = '—';
+    $('dbg-mode-lat').textContent = `${currentLatencyMode.toUpperCase()} / ${currentFitMode}`;
     return;
   }
 
@@ -164,126 +184,70 @@ function updateDebugOverlay() {
   const p = m.pacing;
   const b = m.playbackBuffer;
 
+  if ($('dbg-buf-target-cur'))
+    $('dbg-buf-target-cur').textContent = `${b?.targetMs || 1000} / ${b?.currentMs || 0} ms`;
+  if ($('dbg-buf-min-max'))
+    $('dbg-buf-min-max').textContent = `${b?.min10s || 0} / ${b?.max10s || 0} ms`;
+  if ($('dbg-buf-state')) $('dbg-buf-state').textContent = `${b?.state || 'BUILDING'}`;
+
   const statusBadge = $('dbg-stream-status');
   if (statusBadge) {
     if (b?.state === 'LOW') {
-      statusBadge.textContent = 'Buffer Baixo';
+      statusBadge.textContent = 'Buffer baixo (ajustando)';
       statusBadge.style.background = 'rgba(234, 179, 8, 0.2)';
       statusBadge.style.color = '#facc15';
     } else if (b?.state === 'RECOVERING') {
-      statusBadge.textContent = 'Adaptando';
+      statusBadge.textContent = 'Adaptando buffer contra jitter';
       statusBadge.style.background = 'rgba(234, 179, 8, 0.2)';
       statusBadge.style.color = '#facc15';
     } else {
-      statusBadge.textContent = 'Estável';
+      statusBadge.textContent = 'Transmissão estável';
       statusBadge.style.background = 'rgba(34, 197, 94, 0.2)';
       statusBadge.style.color = '#4ade80';
     }
   }
 
-  // 1. Rede
-  if ($('dbg-net-pkts'))
-    $('dbg-net-pkts').textContent = `${m.network?.receiveFps || 0} v / ${s.audio ? 'opus' : '0'} fps`;
-  if ($('dbg-net-p50-p95-p99'))
-    $('dbg-net-p50-p95-p99').textContent = `${m.network?.p50 || 0} / ${m.network?.p95 || 0} / ${m.network?.p99 || 0} ms`;
-  if ($('dbg-net-max-gap'))
-    $('dbg-net-max-gap').textContent = `${m.network?.maxGap || 0} ms (jit: ${m.network?.jitter || 0}ms)`;
-  if ($('dbg-net-transport'))
-    $('dbg-net-transport').textContent = inDiscord ? 'WebSocket (Discord Proxy)' : (s.viaRtc ? 'WebRTC (Direto)' : 'WebSocket (Relay)');
+  $('dbg-fps-rec').textContent = `${m.receiveFps}`;
+  $('dbg-fps-dec').textContent = `${m.decodeFps}`;
+  $('dbg-fps-ren').textContent = `${m.renderFps}`;
 
-  // 2. Decoder
-  if ($('dbg-dec-chunks'))
-    $('dbg-dec-chunks').textContent = `${m.decoder?.chunksSubmittedSec || 0}/s · HW Q: ${m.decoder?.decodeQueueSize || 0}`;
-  if ($('dbg-dec-fps'))
-    $('dbg-dec-fps').textContent = `${m.decoder?.decodeFps || 0} fps`;
-  if ($('dbg-dec-p50-p95-p99'))
-    $('dbg-dec-p50-p95-p99').textContent = `${m.decoder?.p50 || 0} / ${m.decoder?.p95 || 0} / ${m.decoder?.p99 || 0} ms`;
-  if ($('dbg-dec-max-gap'))
-    $('dbg-dec-max-gap').textContent = `${m.decoder?.maxGap || 0} ms`;
-  if ($('dbg-dec-reconfig-err'))
-    $('dbg-dec-reconfig-err').textContent = `${m.decoder?.reconfigures || 0} rec / ${m.decoder?.errors || 0} err`;
-
-  // 3. Apresentação
-  if ($('dbg-pres-q'))
-    $('dbg-pres-q').textContent = `${m.presentation?.queuedFrames || 0} quadros (Live: ${m.videoFrameLifetime?.currentlyLive || 0})`;
-  if ($('dbg-pres-fps'))
-    $('dbg-pres-fps').textContent = `${m.presentation?.renderFps || 0} fps`;
-  if ($('dbg-pres-p50-p95-p99'))
-    $('dbg-pres-p50-p95-p99').textContent = `${m.presentation?.p50 || 0} / ${m.presentation?.p95 || 0} / ${m.presentation?.p99 || 0} ms`;
-  if ($('dbg-pres-max-gap'))
-    $('dbg-pres-max-gap').textContent = `${m.presentation?.maxGap || 0} ms`;
-  if ($('dbg-pres-drops'))
-    $('dbg-pres-drops').textContent = `${m.presentation?.droppedLate || 0} atraso / ${m.presentation?.droppedRecovery || 0} rec`;
-  if ($('dbg-pres-drift-lat'))
-    $('dbg-pres-drift-lat').textContent = `${m.presentation?.avDriftMs || 0} ms / ${m.streamLatency?.estimatedEndToEndMs || 0} ms`;
-  if ($('dbg-pres-resync'))
-    $('dbg-pres-resync').textContent = `${m.presentation?.hardResyncCount || 0} hard / ${m.presentation?.softCorrectionCount || 0} soft`;
-
-  // 4. rAF & Contexto
-  if ($('dbg-raf-fps'))
-    $('dbg-raf-fps').textContent = `${m.raf?.rafFps || 0} Hz`;
-  if ($('dbg-raf-p50-p95-p99'))
-    $('dbg-raf-p50-p95-p99').textContent = `${m.raf?.p50 || 0} / ${m.raf?.p95 || 0} / ${m.raf?.p99 || 0} ms`;
-  if ($('dbg-raf-max-gap'))
-    $('dbg-raf-max-gap').textContent = `${m.raf?.maxGap || 0} ms`;
-  if ($('dbg-raf-context'))
-    $('dbg-raf-context').textContent = `${m.raf?.visibilityState || 'visible'} · ${m.raf?.hasFocus ? 'focado' : 'sem foco'}`;
-
-  // 5. Main Thread & Canvas
-  if ($('dbg-mt-tasks10s'))
-    $('dbg-mt-tasks10s').textContent = `${m.mainThread?.longTasks10s || 0} (Max: ${m.mainThread?.longestTaskMs || 0}ms)`;
-  if ($('dbg-canvas-draw'))
-    $('dbg-canvas-draw').textContent = `${m.canvas?.drawAvgMs || 0} / ${m.canvas?.drawP95Ms || 0} / ${m.canvas?.drawMaxMs || 0} ms`;
-  if ($('dbg-canvas-res'))
-    $('dbg-canvas-res').textContent = `${m.canvas?.backingRes || '—'} / ${m.canvas?.cssRes || '—'}`;
-  if ($('dbg-canvas-dpr-vp'))
-    $('dbg-canvas-dpr-vp').textContent = `DPR: ${m.canvas?.dpr || 1} · View: ${m.canvas?.viewport || '—'}`;
-
-  // 6. Stutters & Classificador
-  const st = p?.stutter;
-  if ($('dbg-stutter-counts')) {
-    const c = st?.countsByCategory || {};
-    $('dbg-stutter-counts').textContent = `A:${c['CASE A'] || 0} B:${c['CASE B'] || 0} C:${c['CASE C'] || 0} D:${c['CASE D'] || 0} E:${c['CASE E'] || 0}`;
+  if ($('dbg-pace-rec'))
+    $('dbg-pace-rec').textContent =
+      `${p?.receiveInterval?.p95 || 0} ms (méd: ${p?.receiveInterval?.avg || 0}ms)`;
+  if ($('dbg-pace-ren'))
+    $('dbg-pace-ren').textContent =
+      `${p?.renderInterval?.p95 || 0} / ${p?.renderInterval?.max || 0} ms`;
+  if ($('dbg-stutters'))
+    $('dbg-stutters').textContent =
+      `${p?.stutter?.windowCandidateStutters || 0} / ${p?.stutter?.windowSevereStutters || 0}`;
+  if ($('dbg-stutter-last')) {
+    const snap = p?.stutter?.latestSnapshot;
+    $('dbg-stutter-last').textContent = snap
+      ? `${snap.renderGapMs}ms (cap: ${snap.captureGapMs ?? '?'}ms, rec: ${snap.receiveGapMs ?? '?'}ms${snap.isKeyframe ? ', KEY' : ''})`
+      : 'Nenhum';
   }
 
-  if ($('dbg-stutter-latest')) {
-    const snap = st?.latestSnapshot;
-    if (!snap) {
-      $('dbg-stutter-latest').textContent = 'Nenhum engasgo recente detectado.';
-    } else {
-      $('dbg-stutter-latest').innerHTML = `
-        <span class="stutter-tag ${snap.classification?.category.toLowerCase().replace(' ', '-')}">[${snap.classification?.category}] ${snap.classification?.name}</span>
-        <div class="stutter-detail">${snap.classification?.description}</div>
-        <div class="stutter-meta">Gap: <b>${snap.renderGapMs}ms</b> (rAF: ${snap.rafGapMs || '?'}ms, Dec: ${snap.decodeGapMs || '?'}ms, Rec: ${snap.receiveGapMs || '?'}ms, Draw: ${snap.canvasDrawMs || '?'}ms) às ${snap.timeFormatted}</div>
-      `;
-    }
-  }
-}
+  if ($('dbg-clock-source'))
+    $('dbg-clock-source').textContent = m.clockSource || (a?.active ? 'AUDIO' : 'VIDEO');
+  if ($('dbg-buf-aud'))
+    $('dbg-buf-aud').textContent = a?.active ? `${Math.round(a.bufferAheadMs)} ms` : '0 ms';
+  if ($('dbg-underruns-aud')) $('dbg-underruns-aud').textContent = String(a?.underrunCount ?? 0);
+  if ($('dbg-av-drift')) $('dbg-av-drift').textContent = a?.active ? `${m.avDriftMs} ms` : 'N/A';
 
-function copyStutterLog() {
-  const s = activeSlot !== null ? streams.get(activeSlot) : [...streams.values()][0];
-  const metrics = s?.player?.getMetrics() || {};
-  const report = {
-    capturedAt: new Date().toISOString(),
-    inDiscord,
-    userAgent: navigator.userAgent,
-    devicePixelRatio: window.devicePixelRatio,
-    viewport: `${window.innerWidth}x${window.innerHeight}`,
-    activeSlot,
-    metrics,
-    recentStutterEvents: window.__STUTTER_EVENTS || [],
-  };
+  if ($('dbg-lat-e2e'))
+    $('dbg-lat-e2e').textContent =
+      `${m.streamLatency?.estimatedEndToEndMs ?? Math.round(m.videoLagMs + (b?.currentMs || 0))} ms`;
+  if ($('dbg-q-presentation'))
+    $('dbg-q-presentation').textContent = String(
+      m.video?.queuedFrames ?? m.presentationQueueSize ?? 0,
+    );
+  if ($('dbg-dropped'))
+    $('dbg-dropped').textContent =
+      `${m.video?.droppedLate ?? m.droppedLate ?? 0} atraso / ${m.video?.droppedRecovery ?? m.droppedRecovery ?? 0} rec`;
 
-  const json = JSON.stringify(report, null, 2);
-  navigator.clipboard.writeText(json).then(() => {
-    toast('Relatório forense copiado para a área de transferência!');
-  }).catch(() => {
-    console.log('[DIAGNOSTIC_REPORT_JSON]', json);
-    toast('Relatório impresso no console (copie pelo F12)');
-  });
-}
-if (typeof window !== 'undefined') {
-  window.copyStutterLog = copyStutterLog;
+  $('dbg-res-native').textContent = m.sizes?.video || '—';
+  $('dbg-res-css').textContent = m.sizes?.box || '—';
+  $('dbg-mode-lat').textContent = `${currentLatencyMode.toUpperCase()} / ${currentFitMode}`;
 }
 
 // ------------------------------------------------------------------- helpers
@@ -2697,7 +2661,6 @@ $('latencySelect')?.addEventListener('change', (e) => applyLatencyMode(e.target.
 // Alternar Debug Overlay HUD
 $('statsToggle')?.addEventListener('click', toggleDebugOverlay);
 $('debugClose')?.addEventListener('click', toggleDebugOverlay);
-$('btnCopyDiagnostics')?.addEventListener('click', copyStutterLog);
 
 // Tela cheia com fallback gracioso para maximização no iframe da Activity
 $('fullscreen')?.addEventListener('click', async () => {

@@ -204,78 +204,16 @@ export function createValueTracker(windowSize = 120) {
   };
 }
 
-export function classifyHitch({
-  renderGapMs = 16.67,
-  receiveGapMs = 16.67,
-  decodeGapMs = 16.67,
-  rafGapMs = 16.67,
-  canvasDrawMs = 1.0,
-  expectedIntervalMs = 16.67,
-} = {}) {
-  const threshold = Math.max(25, expectedIntervalMs * 1.8);
-
-  // CASE D: Canvas draw execution duration spiked on GPU raster/composition
-  if (canvasDrawMs > 16.0) {
-    return {
-      category: 'CASE D',
-      name: 'CANVAS / GPU COMPOSITION',
-      description: `ctx.drawImage() demorou ${Math.round(canvasDrawMs)}ms (gargalo de GPU/raster).`,
-    };
-  }
-
-  // CASE A: Inter-arrival gap on WebSocket / proxy preceded the presentation gap
-  if (receiveGapMs > threshold && receiveGapMs >= renderGapMs * 0.7) {
-    return {
-      category: 'CASE A',
-      name: 'NETWORK / ACTIVITY PROXY',
-      description: `Buraco na chegada de pacotes (${Math.round(receiveGapMs)}ms) precedeu o atraso.`,
-    };
-  }
-
-  // CASE B: Decode output inter-arrival gap spiked while network was on time
-  if (decodeGapMs > threshold && receiveGapMs <= expectedIntervalMs * 1.5) {
-    return {
-      category: 'CASE B',
-      name: 'DECODER / GPU DECODE',
-      description: `VideoDecoder demorou para entregar (${Math.round(decodeGapMs)}ms) com rede estável.`,
-    };
-  }
-
-  // CASE C: requestAnimationFrame callback was delayed by main thread or iframe throttling
-  if (rafGapMs > threshold && decodeGapMs <= expectedIntervalMs * 1.5) {
-    return {
-      category: 'CASE C',
-      name: 'RAF / ACTIVITY MAIN THREAD / COMPOSITOR',
-      description: `requestAnimationFrame atrasou (${Math.round(rafGapMs)}ms) com decodificador pronto.`,
-    };
-  }
-
-  // CASE E: Presentation scheduler pacing or clock synchronization drift
-  return {
-    category: 'CASE E',
-    name: 'PLAYER CLOCK / PRESENTATION SCHEDULER',
-    description: `Atraso no relógio ou ritmo do agendador (${Math.round(renderGapMs)}ms).`,
-  };
-}
-
 export function createStutterDetector({
   candidateThresholdMs = 40,
   severeThresholdMs = 75,
-  maxHistory = 25,
+  maxHistory = 10,
 } = {}) {
   const history = [];
   let totalCandidateStutters = 0;
   let totalSevereStutters = 0;
   let windowCandidateStutters = 0;
   let windowSevereStutters = 0;
-
-  const countsByCategory = {
-    'CASE A': 0,
-    'CASE B': 0,
-    'CASE C': 0,
-    'CASE D': 0,
-    'CASE E': 0,
-  };
 
   function record({
     renderGapMs,
@@ -284,33 +222,11 @@ export function createStutterDetector({
     isKeyframe = false,
     networkLagMs = null,
     receiveGapMs = null,
-    decodeGapMs = null,
-    rafGapMs = null,
-    canvasDrawMs = null,
     decodeQueueSize = 0,
     presentationQueueSize = 0,
-    avDriftMs = 0,
-    expectedIntervalMs = 16.67,
-    expectedFps = 60,
-    receiveFps = 0,
-    decodeFps = 0,
-    renderFps = 0,
-    rafFps = 0,
-    receiveP95 = 0,
-    decodeP95 = 0,
-    renderP95 = 0,
-    rafP95 = 0,
-    canvasDrawP95 = 0,
-    longestLongTaskMs = 0,
-    visibilityState = 'visible',
-    hasFocus = true,
-    transport = 'WebSocket (Proxy)',
   }) {
-    const dynamicCandidateThreshold = Math.max(candidateThresholdMs, expectedIntervalMs * 2.2);
-    const dynamicSevereThreshold = Math.max(severeThresholdMs, expectedIntervalMs * 4.0);
-
-    const isCandidate = renderGapMs >= dynamicCandidateThreshold;
-    const isSevere = renderGapMs >= dynamicSevereThreshold;
+    const isCandidate = renderGapMs >= candidateThresholdMs;
+    const isSevere = renderGapMs >= severeThresholdMs;
 
     if (isCandidate) {
       totalCandidateStutters++;
@@ -322,60 +238,21 @@ export function createStutterDetector({
     }
 
     if (isCandidate) {
-      const classification = classifyHitch({
-        renderGapMs,
-        receiveGapMs: receiveGapMs ?? 16.67,
-        decodeGapMs: decodeGapMs ?? 16.67,
-        rafGapMs: rafGapMs ?? 16.67,
-        canvasDrawMs: canvasDrawMs ?? 1.0,
-        expectedIntervalMs,
-      });
-
-      countsByCategory[classification.category] = (countsByCategory[classification.category] || 0) + 1;
-
       const snapshot = {
-        id: totalCandidateStutters,
         timestamp: Date.now(),
-        timeFormatted: new Date().toLocaleTimeString(),
-        expectedFps,
-        expectedIntervalMs: Math.round(expectedIntervalMs * 10) / 10,
         renderGapMs: Math.round(renderGapMs * 10) / 10,
         captureGapMs: captureGapMs !== null ? Math.round(captureGapMs * 10) / 10 : null,
-        receiveGapMs: receiveGapMs !== null ? Math.round(receiveGapMs * 10) / 10 : null,
-        decodeGapMs: decodeGapMs !== null ? Math.round(decodeGapMs * 10) / 10 : null,
-        rafGapMs: rafGapMs !== null ? Math.round(rafGapMs * 10) / 10 : null,
-        canvasDrawMs: canvasDrawMs !== null ? Math.round(canvasDrawMs * 10) / 10 : null,
         encodeDurationMs: encodeDurationMs !== null ? Math.round(encodeDurationMs * 10) / 10 : null,
         isKeyframe,
         networkLagMs: networkLagMs !== null ? Math.round(networkLagMs) : null,
-        receiveFps,
-        decodeFps,
-        renderFps,
-        rafFps,
-        receiveP95: Math.round(receiveP95 * 10) / 10,
-        decodeP95: Math.round(decodeP95 * 10) / 10,
-        renderP95: Math.round(renderP95 * 10) / 10,
-        rafP95: Math.round(rafP95 * 10) / 10,
-        canvasDrawP95: Math.round(canvasDrawP95 * 10) / 10,
+        receiveGapMs: receiveGapMs !== null ? Math.round(receiveGapMs * 10) / 10 : null,
         decodeQueueSize,
         presentationQueueSize,
-        avDriftMs: Math.round(avDriftMs),
-        longestLongTaskMs: Math.round(longestLongTaskMs),
-        visibilityState,
-        hasFocus,
-        transport,
         severity: isSevere ? 'severe' : 'candidate',
-        classification,
       };
 
       history.unshift(snapshot);
       if (history.length > maxHistory) history.pop();
-
-      // Expor para depuração global
-      if (typeof window !== 'undefined') {
-        window.__STUTTER_EVENTS = history;
-      }
-
       return snapshot;
     }
     return null;
@@ -387,7 +264,6 @@ export function createStutterDetector({
       totalSevereStutters,
       windowCandidateStutters,
       windowSevereStutters,
-      countsByCategory: { ...countsByCategory },
       latestSnapshot: history[0] ?? null,
       history: [...history],
     };
@@ -402,7 +278,6 @@ export function createStutterDetector({
     history.length = 0;
     totalCandidateStutters = 0;
     totalSevereStutters = 0;
-    for (const k of Object.keys(countsByCategory)) countsByCategory[k] = 0;
     resetWindow();
   }
 
