@@ -1486,20 +1486,17 @@ button {
   top: 12px;
   right: 12px;
   z-index: 100;
-  background: rgba(10, 12, 16, 0.94);
+  background: rgba(10, 12, 16, 0.92);
   border: 1px solid rgba(255, 255, 255, 0.15);
-  backdrop-filter: blur(10px);
+  backdrop-filter: blur(8px);
   border-radius: 8px;
   padding: 12px 14px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 11px;
   color: #e0e6ed;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
-  min-width: 320px;
-  max-width: 380px;
-  max-height: 85vh;
-  display: flex;
-  flex-direction: column;
+  min-width: 280px;
+  max-width: 340px;
   pointer-events: auto;
 }
 
@@ -1515,22 +1512,6 @@ button {
   color: #5865f2;
 }
 
-.debug-scroll-container {
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding-right: 4px;
-}
-
-.debug-scroll-container::-webkit-scrollbar {
-  width: 4px;
-}
-.debug-scroll-container::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.2);
-  border-radius: 2px;
-}
-
 .debug-close {
   background: transparent;
   border: none;
@@ -1540,8 +1521,15 @@ button {
   line-height: 1;
   padding: 0 4px;
 }
+
 .debug-close:hover {
   color: #fff;
+}
+
+.debug-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .debug-section {
@@ -1551,6 +1539,7 @@ button {
   border-bottom: 1px dashed rgba(255, 255, 255, 0.08);
   padding-bottom: 6px;
 }
+
 .debug-section:last-child {
   border-bottom: none;
   padding-bottom: 0;
@@ -1569,67 +1558,12 @@ button {
   justify-content: space-between;
   align-items: center;
 }
-.debug-item-col {
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
-}
 
 .debug-item span {
   color: #a0aab6;
 }
+
 .debug-item b {
   color: #57f287;
   font-weight: 600;
-}
-
-.badge-stable {
-  background: rgba(34, 197, 94, 0.2);
-  color: #4ade80;
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 11px;
-}
-.badge-warning {
-  background: rgba(234, 179, 8, 0.2);
-  color: #facc15;
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-size: 11px;
-}
-
-.badge-case-a { color: #f87171; font-weight: 700; margin-right: 4px; }
-.badge-case-b { color: #fb923c; font-weight: 700; margin-right: 4px; }
-.badge-case-c { color: #facc15; font-weight: 700; margin-right: 4px; }
-.badge-case-d { color: #c084fc; font-weight: 700; margin-right: 4px; }
-.badge-case-e { color: #38bdf8; font-weight: 700; }
-
-.stutter-log-box {
-  background: rgba(0, 0, 0, 0.4);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 4px;
-  padding: 6px 8px;
-  font-size: 10px;
-  line-height: 1.4;
-  color: #cbd5e1;
-  width: 100%;
-  box-sizing: border-box;
-}
-
-.btn-copy-diag {
-  margin-top: 6px;
-  background: rgba(88, 101, 242, 0.25);
-  border: 1px solid rgba(88, 101, 242, 0.5);
-  color: #c7d2fe;
-  padding: 6px 10px;
-  border-radius: 4px;
-  font-size: 10.5px;
-  cursor: pointer;
-  width: 100%;
-  font-family: inherit;
-  transition: all 0.15s ease;
-}
-.btn-copy-diag:hover {
-  background: rgba(88, 101, 242, 0.45);
-  color: #fff;
 }
