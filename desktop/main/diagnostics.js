@@ -7,12 +7,15 @@ export class DiagnosticsManager {
     const timestamp = new Date().toISOString();
     const config = configManager.getPublicConfig();
 
+    const targetOrigin = (publicUrl || config.publicOrigin || 'https://zaprecovery.online').replace(/\/+$/, '');
+    const wsOrigin = targetOrigin.replace(/^http/, 'ws');
+
     let railwayHealthy = false;
     let railwayPingMs = null;
 
     try {
       const start = Date.now();
-      const res = await fetch('https://zaprecovery.online/api/health', {
+      const res = await fetch(`${targetOrigin}/api/health`, {
         signal: AbortSignal.timeout(4000),
       });
       railwayPingMs = Date.now() - start;
@@ -33,8 +36,8 @@ export class DiagnosticsManager {
         freeMemoryMB: Math.round(os.freemem() / 1024 / 1024),
       },
       infrastructure: {
-        target: 'https://zaprecovery.online',
-        websocket: 'wss://zaprecovery.online/ws',
+        target: targetOrigin,
+        websocket: `${wsOrigin}/ws`,
         healthy: railwayHealthy,
         latencyMs: railwayPingMs,
       },
@@ -52,6 +55,16 @@ export class DiagnosticsManager {
         state: currentState,
         serverRunning: stateData.serverRunning ?? false,
         controlConnected: stateData.publicEndpointReady ?? false,
+        pingIntervalActive: stateData.pingIntervalActive ?? false,
+        reconnectTimerActive: stateData.reconnectTimerActive ?? false,
+        passiveStandbyActive: stateData.passiveStandbyActive ?? false,
+        reconnectAttempts: stateData.reconnectAttempts ?? 0,
+      },
+      processMetrics: {
+        memory: process.memoryUsage(),
+        cpu: process.cpuUsage(),
+        activeHandles: typeof process._getActiveHandles === 'function' ? process._getActiveHandles().length : null,
+        activeRequests: typeof process._getActiveRequests === 'function' ? process._getActiveRequests().length : null,
       },
       recentLogs: logger.getRecentLogs().slice(-30),
     };

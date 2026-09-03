@@ -171,6 +171,7 @@ export function createAppServer(options = {}) {
             grant_type: 'authorization_code',
             code,
           }),
+          signal: AbortSignal.timeout(8000),
         });
 
         const data = await r.json();
@@ -215,6 +216,7 @@ export function createAppServer(options = {}) {
     try {
       const me = await fetch('https://discord.com/api/users/@me', {
         headers: { Authorization: `Bearer ${access_token}` },
+        signal: AbortSignal.timeout(8000),
       }).then((r) => r.json());
 
       if (!me?.id) return res.status(401).json({ error: 'token invalido' });
@@ -333,6 +335,7 @@ export function createAppServer(options = {}) {
         `https://discord.com/api/v10/guilds/${guildId}/voice-states/${userId}`,
         {
           headers: { Authorization: `Bot ${discordBotToken}` },
+          signal: AbortSignal.timeout(5000),
         },
       );
 
@@ -854,11 +857,26 @@ export function createAppServer(options = {}) {
       }
     });
 
+    let cleaned = false;
     const cleanup = () => {
+      if (cleaned) return;
+      cleaned = true;
       desktopHosts.delete(ws);
       console.log('[control] Desktop host desconectado.');
       if (desktopHosts.size === 0) {
         activeDesktopClientId = null;
+      }
+      // Fail any pending OAuth exchanges that were waiting on this desktop host.
+      // Without this, they would silently time out after 12 seconds, blocking the
+      // HTTP response handler for the full timeout window.
+      for (const [reqId, pending] of pendingOAuthExchanges) {
+        clearTimeout(pending.timer);
+        pendingOAuthExchanges.delete(reqId);
+        pending.reject(
+          new Error(
+            'O aplicativo Desktop desconectou antes de completar a troca de token do Discord.',
+          ),
+        );
       }
     };
     ws.on('close', cleanup);
@@ -1092,17 +1110,11 @@ export function createAppServer(options = {}) {
     }
   }, 15_000);
 
-  wss.on('connection', (ws) => {
-    ws.__alive = true;
-    ws.on('pong', () => {
-      ws.__alive = true;
-      if (ws.__pingSentAt) {
-        const measured = Date.now() - ws.__pingSentAt;
-        ws.__rttMs = Number.isFinite(ws.__rttMs) ? ws.__rttMs * 0.7 + measured * 0.3 : measured;
-        ws.__pingSentAt = null;
-      }
-    });
-  });
+  // NOTE: ws.__alive initialisation and the 'pong' handler are already set up by the
+  // primary wss.on('connection', ...) handler above. A second handler here would attach
+  // duplicate pong listeners to every socket, causing RTT to be measured/overwritten twice
+  // per pong event (with __pingSentAt already nulled by the first handler, the second
+  // measurement would always read 0 or null). The heartbeat only needs the interval below.
 
   heartbeat.unref?.();
   wss.on('close', () => clearInterval(heartbeat));

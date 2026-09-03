@@ -399,7 +399,10 @@ app.on('before-quit', async (event) => {
     isQuitting = true;
     event.preventDefault();
     try {
-      await processManager.stop();
+      await Promise.race([
+        processManager.stop(),
+        new Promise((resolve) => setTimeout(resolve, 3000)),
+      ]);
     } catch {
       // Ignore
     }
