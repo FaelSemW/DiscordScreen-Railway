@@ -3,11 +3,11 @@ FROM node:22-slim AS build
 
 WORKDIR /app
 
-COPY package.json ./
+COPY package.json package-lock.json* ./
 COPY client/package.json client/
 COPY server/package.json server/
 
-RUN npm install
+RUN npm install --ignore-scripts
 
 COPY client/ client/
 COPY server/ server/
@@ -22,11 +22,11 @@ ENV NODE_ENV=production
 
 WORKDIR /app
 
-COPY package.json ./
+COPY package.json package-lock.json* ./
 COPY client/package.json client/
 COPY server/package.json server/
 
-RUN npm install --omit=dev && npm cache clean --force
+RUN npm install --omit=dev --ignore-scripts && npm cache clean --force
 
 COPY server/ server/
 COPY shared/ shared/
