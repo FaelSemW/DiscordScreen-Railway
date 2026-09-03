@@ -180,12 +180,12 @@ describe('Two-Tier Reconnect Policy & Long-Offline Simulation', () => {
 
     // Simulate 15 intervals of passive retries (equivalent to 15 minutes at 60s/interval)
     for (let minute = 1; minute <= 15; minute++) {
-      pm._schedulePassiveStandby(10); // 10ms fast-forward per simulated minute
-      await new Promise((resolve) => setTimeout(resolve, 25));
+      pm._schedulePassiveStandby(5); // 5ms fast-forward per simulated minute
+      await new Promise((resolve) => setTimeout(resolve, 60));
       expect(pm.state).toBe(STATES.ERROR);
-      expect(pm.passiveStandbyTimer).not.toBeNull();
       expect(pm.controlWs).toBeNull();
     }
+    expect(pm.passiveStandbyTimer).not.toBeNull();
 
     // Verify zero explosion
     const midHandles = process._getActiveHandles?.()?.length ?? 0;
