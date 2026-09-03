@@ -711,7 +711,7 @@ function buildTile(p, { palco = false, semVideo = false, slot: slotDado = null }
 
     // Entre pedir para assistir e o primeiro quadro chegar existe uma espera
     // real: sem este aviso ela é indistinguível de um travamento.
-    if (!stream.started) tile.append(buildLoading());
+    if (!stream.started) tile.append(buildLoading(slot));
 
     // O clique direito pode ser capturado pelo cliente do Discord antes de
     // chegar aqui, então o botão visível é o caminho garantido.
@@ -760,13 +760,100 @@ function buildTile(p, { palco = false, semVideo = false, slot: slotDado = null }
   return { el: tile, slot };
 }
 
-/** Espera pelo primeiro quadro. Sai sozinha quando o decoder desenha. */
-function buildLoading() {
+/**
+ * Espera pelo primeiro quadro com máquina de estados finita:
+ * CONNECTING -> WAITING_FOR_VIDEO -> PLAYING ou VIDEO_ERROR
+ */
+function buildLoading(slot = null) {
+  const s = slot !== null ? streams.get(slot) : null;
   const wrap = document.createElement('div');
   wrap.className = 'tile-loading';
-  wrap.innerHTML = '<span class="spinner"></span>';
-  wrap.append(document.createTextNode('Conectando…'));
+  if (slot !== null) wrap.dataset.slot = String(slot);
+
+  const state = s?.videoState || 'CONNECTING';
+
+  if (state === 'VIDEO_ERROR') {
+    wrap.classList.add('tile-loading-error');
+    wrap.style.pointerEvents = 'auto';
+
+    const icon = document.createElement('span');
+    icon.style.fontSize = '22px';
+    icon.textContent = '⚠️';
+    wrap.append(icon);
+
+    const txt = document.createElement('span');
+    txt.textContent = 'Vídeo não recebido';
+    wrap.append(txt);
+
+    const btn = document.createElement('button');
+    btn.className = 'tile-loading-retry';
+    btn.textContent = 'Tentar novamente';
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (slot !== null) recuperarVideo(slot);
+    });
+    wrap.append(btn);
+  } else if (state === 'WAITING_FOR_VIDEO') {
+    wrap.innerHTML = '<span class="spinner"></span>';
+    wrap.append(document.createTextNode('Aguardando vídeo…'));
+  } else {
+    wrap.innerHTML = '<span class="spinner"></span>';
+    wrap.append(document.createTextNode('Conectando…'));
+  }
+
   return wrap;
+}
+
+function atualizarLoading(slot, estado) {
+  const s = streams.get(slot);
+  if (!s || s.started) return;
+  s.videoState = estado;
+  const tile = document.querySelector(`.tile[data-slot="${slot}"]`);
+  if (!tile) return;
+  const oldLoading = tile.querySelector('.tile-loading');
+  if (oldLoading) {
+    const novo = buildLoading(slot);
+    oldLoading.replaceWith(novo);
+  }
+}
+
+function recuperarVideo(slot) {
+  const s = streams.get(slot);
+  if (!s) return;
+  console.info(`[VIDEO slot=${slot}] Tentando recuperação manual do vídeo...`);
+  s.videoState = 'CONNECTING';
+  s.watchStartTime = performance.now();
+  iniciarWatchdogVideo(slot);
+  atualizarLoading(slot, 'CONNECTING');
+  if (ws?.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'need-keyframe', slot }));
+  }
+  const cfg = available.get(slot)?.config;
+  if (cfg && !s.viaRtc) {
+    s.player.start(cfg);
+  }
+}
+
+function iniciarWatchdogVideo(slot) {
+  const s = streams.get(slot);
+  if (!s) return;
+  clearTimeout(s.videoWatchdog);
+  s.videoWatchdog = setTimeout(() => {
+    const atual = streams.get(slot);
+    if (!atual || atual.started) return;
+    console.warn(`[VIDEO slot=${slot}] Watchdog T+4s: vídeo ainda não renderizado, solicitando keyframe`);
+    atualizarLoading(slot, 'WAITING_FOR_VIDEO');
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'need-keyframe', slot }));
+    }
+
+    atual.videoWatchdog = setTimeout(() => {
+      const finalS = streams.get(slot);
+      if (!finalS || finalS.started) return;
+      console.error(`[VIDEO slot=${slot}] Watchdog T+10s: nenhum quadro de vídeo recebido/renderizado`);
+      atualizarLoading(slot, 'VIDEO_ERROR');
+    }, 6000);
+  }, 4000);
 }
 
 /** Quantas pessoas assistem esta tela; a lista aparece ao passar o mouse. */
@@ -1131,14 +1218,35 @@ function openStream(slot, userId) {
     started: false,
     player: null,
     audio: null,
+    videoState: 'CONNECTING',
+    videoWatchdog: null,
+    watchStartTime: performance.now(),
+    firstChunkLogged: false,
   };
 
   s.player = createPlayer(canvas, {
     onError: (m) => toast(m, true),
     onTamanho: (dim) => {
       s.started = true;
+      s.videoState = 'PLAYING';
+      clearTimeout(s.videoWatchdog);
+      s.videoWatchdog = null;
+
+      const renderElapsed = Math.round(
+        performance.now() - (s.watchStartTime || performance.now()),
+      );
+      console.info(
+        `[VIDEO slot=${slot}] first-rendered-frame (${dim?.width}×${dim?.height}) em ${renderElapsed}ms`,
+      );
+      if (renderElapsed > 2000) {
+        console.warn(
+          `[VIDEO slot=${slot}] Demora na renderização do primeiro quadro: ${renderElapsed}ms (>2.0s)`,
+        );
+      }
+
       if (typeof window !== 'undefined' && window.__DIAGNOSTICS) {
         window.__DIAGNOSTICS.videoSizeChanges = (window.__DIAGNOSTICS.videoSizeChanges || 0) + 1;
+        window.__DIAGNOSTICS.firstRenderDurationMs = renderElapsed;
       }
       const tile = document.querySelector(`.tile[data-slot="${slot}"]`);
       if (tile) {
@@ -1160,6 +1268,7 @@ function openStream(slot, userId) {
   });
 
   streams.set(slot, s);
+  iniciarWatchdogVideo(slot);
 }
 
 /** Liga o som desta transmissão. Chamado quando a config de áudio chega. */
@@ -1170,6 +1279,9 @@ function startAudio(slot, config) {
   s.audio?.stop();
   s.audio = createAudio({
     onError: (m) => toast(m, true),
+    onStateChange: () => {
+      atualizarAudioUnlock(slot);
+    },
     volume: volumeEfetivo(s.userId),
     latencyMode: currentLatencyMode,
   });
@@ -1177,8 +1289,43 @@ function startAudio(slot, config) {
     s.audio = null;
     return;
   }
+  atualizarAudioUnlock(slot);
   renderBar();
 }
+
+function atualizarAudioUnlock(slot) {
+  const s = streams.get(slot);
+  const tile = document.querySelector(`.tile[data-slot="${slot}"]`);
+  if (!tile) return;
+
+  const existingBtn = tile.querySelector('.tile-audio-unlock');
+  if (s?.audio?.isSuspended()) {
+    if (!existingBtn) {
+      const btn = document.createElement('button');
+      btn.className = 'tile-audio-unlock';
+      btn.setAttribute('aria-label', 'Ativar áudio');
+      btn.textContent = '🔊 Toque para ativar o áudio';
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await s.audio?.resume();
+        atualizarAudioUnlock(slot);
+      });
+      tile.append(btn);
+    }
+  } else if (existingBtn) {
+    existingBtn.remove();
+  }
+}
+
+function tentarDesbloquearAudioGlobal() {
+  for (const [slot, s] of streams.entries()) {
+    if (s.audio?.isSuspended()) {
+      s.audio.resume().then(() => atualizarAudioUnlock(slot)).catch(() => {});
+    }
+  }
+}
+window.addEventListener('pointerdown', tentarDesbloquearAudioGlobal, { passive: true });
+window.addEventListener('touchend', tentarDesbloquearAudioGlobal, { passive: true });
 
 function startStream(slot, config) {
   const s = streams.get(slot);
@@ -1195,8 +1342,12 @@ function startStream(slot, config) {
 function closeStream(slot) {
   const s = streams.get(slot);
   if (!s) return;
+  clearTimeout(s.videoWatchdog);
+  s.videoWatchdog = null;
   s.player.stop();
   s.audio?.stop();
+  const tile = document.querySelector(`.tile[data-slot="${slot}"]`);
+  tile?.querySelector('.tile-audio-unlock')?.remove();
   fecharPeer(s);
   s.canvas.remove();
   s.video.remove();
@@ -2100,10 +2251,22 @@ function connect() {
     // para qual decodificador — som e imagem dividem o mesmo canal.
     if (typeof e.data !== 'string') {
       const view = new DataView(e.data);
-      const s = streams.get(view.getUint8(0));
+      const slot = view.getUint8(0);
+      const s = streams.get(slot);
       if (!s) return;
-      if (view.getUint8(1) === 3) s.audio?.push(e.data);
-      else s.player.push(e.data);
+      const tipo = view.getUint8(1);
+      if (tipo === 3) {
+        s.audio?.push(e.data);
+      } else {
+        if (!s.firstChunkLogged) {
+          s.firstChunkLogged = true;
+          const elapsed = Math.round(
+            performance.now() - (s.watchStartTime || performance.now()),
+          );
+          console.info(`[VIDEO slot=${slot}] first-chunk-received (tipo=${tipo}) em ${elapsed}ms`);
+        }
+        s.player.push(e.data);
+      }
       return;
     }
 

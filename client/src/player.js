@@ -125,6 +125,8 @@ export function createPlayer(
   const fila = [];
   let playbackMediaTimeMs = null;
   let wallClockAnchorMs = null;
+  let audioToVideoOffsetMs = null;
+  let consecutiveHardResyncs = 0;
   let lastMediaClockSource = 'VIDEO';
   let rafId = null;
   let virgem = true;
@@ -136,6 +138,8 @@ export function createPlayer(
     playbackState = 'BUILDING';
     playbackMediaTimeMs = null;
     wallClockAnchorMs = null;
+    audioToVideoOffsetMs = null;
+    consecutiveHardResyncs = 0;
   }
 
   function start(rawConfig) {
@@ -171,6 +175,8 @@ export function createPlayer(
     playbackState = 'BUILDING';
     playbackMediaTimeMs = null;
     wallClockAnchorMs = null;
+    audioToVideoOffsetMs = null;
+    consecutiveHardResyncs = 0;
     return true;
   }
 
@@ -206,7 +212,7 @@ export function createPlayer(
       return;
     }
 
-    if (decoder.decodeQueueSize > latencyConfig.maxDecodeQueue) {
+    if (decoder.decodeQueueSize > Math.max(16, latencyConfig.maxDecodeQueue * 2)) {
       framesDropped++;
       droppedRecoveryCount++;
       if (!isKeyframe) {
@@ -319,18 +325,19 @@ export function createPlayer(
     const audioClock = getAudioClock?.();
     let mediaPlaybackTime;
 
+    const audioActive = Boolean(
+      audioClock && audioClock.active && audioClock.mediaTimestampMs !== null,
+    );
+
     if (playbackState === 'BUILDING') {
       const oldestTs = fila[0].tsMs;
       const newestTs = fila[fila.length - 1].tsMs;
       const bufferedSpan = newestTs - oldestTs;
-      const audioActive = Boolean(
-        audioClock && audioClock.active && audioClock.mediaTimestampMs !== null,
-      );
 
       if (
         bufferedSpan >= latencyConfig.startupBufferMs ||
         audioActive ||
-        fila.length >= 30 ||
+        fila.length >= Math.min(10, latencyConfig.filaMax) ||
         (wallClockAnchorMs !== null && agora - wallClockAnchorMs >= latencyConfig.startupBufferMs)
       ) {
         playbackState = 'STABLE';
@@ -343,11 +350,66 @@ export function createPlayer(
       }
     }
 
-    if (audioClock && audioClock.active && audioClock.mediaTimestampMs !== null) {
-      mediaPlaybackTime = audioClock.mediaTimestampMs;
+    if (audioActive) {
       lastMediaClockSource = 'AUDIO';
+      const rawAudioTime = audioClock.mediaTimestampMs;
+      mediaPlaybackTime =
+        audioToVideoOffsetMs !== null ? rawAudioTime + audioToVideoOffsetMs : rawAudioTime;
+
+      const oldest = fila[0];
+      let avDrift = oldest.tsMs - mediaPlaybackTime;
+
+      // 1. Se o vídeo está massivamente adiantado em relação ao áudio (> hardResyncThresholdMs),
+      // é impossível ser jitter normal em transmissão ao vivo: os clocks possuem origens diferentes.
+      if (avDrift > latencyConfig.hardResyncThresholdMs) {
+        console.warn(
+          `[AV_SYNC] Vídeo adiantado além do limiar (${avDrift}ms). Calibrando offset de áudio/vídeo.`,
+        );
+        audioToVideoOffsetMs = oldest.tsMs - rawAudioTime;
+        mediaPlaybackTime = rawAudioTime + audioToVideoOffsetMs;
+        avDrift = oldest.tsMs - mediaPlaybackTime;
+      }
+      // 2. Se o atraso for inaceitável (< -hardResyncThresholdMs)
+      else if (avDrift < -latencyConfig.hardResyncThresholdMs) {
+        consecutiveHardResyncs++;
+        // Na primeira ocorrência, tenta pedir um keyframe novo conforme a arquitetura
+        if (consecutiveHardResyncs === 1) {
+          console.warn(
+            `[HARD_RESYNC] atraso inaceitável (${avDrift}ms), solicitando keyframe para recuperar`,
+          );
+          hardResyncCount++;
+          esvaziar();
+          playbackState = 'BUILDING';
+          playbackMediaTimeMs = null;
+          wallClockAnchorMs = null;
+          audioToVideoOffsetMs = null;
+          needKeyframe = true;
+          onNeedKeyframe?.();
+          return;
+        }
+
+        // Se já tentou hard resync e a discrepância persiste, os clocks de captura
+        // de áudio e vídeo possuem réguas diferentes. Calibra o offset para não travar
+        // em loop infinito descartando todos os quadros!
+        console.warn(
+          `[AV_SYNC] Discrepância de sincronia persistente (${avDrift}ms, tentativas=${consecutiveHardResyncs}). Calibrando offset de áudio/vídeo.`,
+        );
+        audioToVideoOffsetMs = oldest.tsMs - rawAudioTime;
+        mediaPlaybackTime = rawAudioTime + audioToVideoOffsetMs;
+        avDrift = oldest.tsMs - mediaPlaybackTime;
+        consecutiveHardResyncs = 0;
+      }
+      // 3. Sincronização adaptativa suave (drift slew) quando offset já está calibrado
+      else if (audioToVideoOffsetMs !== null && Math.abs(avDrift) > 35) {
+        const slew = Math.sign(avDrift) * Math.min(Math.abs(avDrift) * 0.05, 1);
+        audioToVideoOffsetMs += slew;
+        mediaPlaybackTime = rawAudioTime + audioToVideoOffsetMs;
+        avDrift = oldest.tsMs - mediaPlaybackTime;
+      }
     } else {
       lastMediaClockSource = 'VIDEO';
+      audioToVideoOffsetMs = null;
+      consecutiveHardResyncs = 0;
       if (playbackMediaTimeMs === null || wallClockAnchorMs === null) {
         playbackMediaTimeMs = fila[0].tsMs;
         wallClockAnchorMs = agora;
@@ -363,20 +425,6 @@ export function createPlayer(
     const avDrift = oldest.tsMs - mediaPlaybackTime;
     lastAvDriftMs = Math.round(avDrift);
     lastPresentationLagMs = Math.max(0, Math.round(mediaPlaybackTime - oldest.tsMs));
-
-    if (avDrift < -latencyConfig.hardResyncThresholdMs) {
-      console.warn(
-        `[HARD_RESYNC] atraso inaceitável (${avDrift}ms), solicitando keyframe para recuperar`,
-      );
-      hardResyncCount++;
-      esvaziar();
-      playbackState = 'BUILDING';
-      playbackMediaTimeMs = null;
-      wallClockAnchorMs = null;
-      needKeyframe = true;
-      onNeedKeyframe?.();
-      return;
-    }
 
     let itemParaPintar = null;
     while (fila.length && fila[0].tsMs <= mediaPlaybackTime + 8) {
@@ -420,6 +468,11 @@ export function createPlayer(
   }
 
   function pintar(frame, isKeyframe = false, captureGapMs = 16.67) {
+    if (!frame || !frame.displayWidth || !frame.displayHeight) {
+      frame?.close?.();
+      return;
+    }
+
     let mudou = false;
     if (canvas.width !== frame.displayWidth || canvas.height !== frame.displayHeight) {
       canvas.width = frame.displayWidth;
@@ -530,12 +583,16 @@ export function createPlayer(
     playbackState = 'BUILDING';
     playbackMediaTimeMs = null;
     wallClockAnchorMs = null;
+    audioToVideoOffsetMs = null;
+    consecutiveHardResyncs = 0;
     lastAvDriftMs = 0;
     lastPresentationLagMs = 0;
     lastRenderTime = null;
     lastDecodeTime = null;
     lastRafTime = null;
     lastReceiveTimestampUs = null;
+    lastChunkWasKeyframe = false;
+    virgem = true;
     if (canvas.width && canvas.height) {
       ctx.fillStyle = '#000';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -707,6 +764,7 @@ export function createPlayer(
         ? null
         : Math.round(receiveIntervalTracker.getStats().jitter),
     getAvDrift: () => lastAvDriftMs,
+    getAudioToVideoOffset: () => audioToVideoOffsetMs,
     getMetrics,
     takeFrameCount: () => framesRendered,
     getSizes,

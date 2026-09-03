@@ -952,6 +952,10 @@ export function createBroadcaster(opts) {
     if (!faixa) return null;
 
     const superficie = videoTrack.getSettings?.().displaySurface;
+    console.info(
+      `[capture diagnostics] superficie=${superficie || 'indefinida'} videoTracks=${capturado.getVideoTracks().length} audioTracks=${capturado.getAudioTracks().length} audioReadyState=${faixa.readyState} audioEnabled=${faixa.enabled} audioMuted=${faixa.muted}`,
+    );
+
     if (somIsolado(superficie)) {
       somBloqueado = false;
       return faixa;
@@ -1057,6 +1061,36 @@ export function createBroadcaster(opts) {
 
   // -------------------------------------------------------------------- áudio
 
+  function resampleAudioData(audioData, targetSampleRate) {
+    const numChannels = audioData.numberOfChannels;
+    const inFrames = audioData.numberOfFrames;
+    const inRate = audioData.sampleRate;
+    const outFrames = Math.max(1, Math.round((inFrames * targetSampleRate) / inRate));
+
+    const resampledData = new Float32Array(outFrames * numChannels);
+    const tempIn = new Float32Array(inFrames);
+
+    for (let c = 0; c < numChannels; c++) {
+      audioData.copyTo(tempIn, { planeIndex: c, format: 'f32-planar' });
+      for (let i = 0; i < outFrames; i++) {
+        const srcPos = (i * (inFrames - 1)) / (outFrames - 1 || 1);
+        const idx0 = Math.floor(srcPos);
+        const idx1 = Math.min(idx0 + 1, inFrames - 1);
+        const frac = srcPos - idx0;
+        resampledData[c * outFrames + i] = tempIn[idx0] * (1 - frac) + tempIn[idx1] * frac;
+      }
+    }
+
+    return new AudioData({
+      format: 'f32-planar',
+      sampleRate: targetSampleRate,
+      numberOfFrames: outFrames,
+      numberOfChannels: numChannels,
+      timestamp: audioData.timestamp,
+      data: resampledData,
+    });
+  }
+
   /**
    * Captura, codifica e envia o som.
    *
@@ -1067,8 +1101,12 @@ export function createBroadcaster(opts) {
   async function pumpAudio(track) {
     if (!window.AudioEncoder || !window.MediaStreamTrackProcessor) return;
 
-    const s = track.getSettings();
-    const sampleRate = s.sampleRate || 48_000;
+    const s = track.getSettings?.() || {};
+    // Opus suporta 8k, 12k, 16k, 24k, 48k. Abas de navegadores costumam operar em 44.1kHz.
+    // Padronizamos para 48kHz quando a taxa de entrada não for suportada nativamente pelo Opus.
+    const OPUS_RATES = new Set([8000, 12000, 16000, 24000, 48000]);
+    const inputSampleRate = s.sampleRate || 48_000;
+    const encoderSampleRate = OPUS_RATES.has(inputSampleRate) ? inputSampleRate : 48_000;
     const numberOfChannels = Math.min(2, s.channelCount || 2);
 
     try {
@@ -1079,7 +1117,7 @@ export function createBroadcaster(opts) {
       });
       audioEncoder.configure({
         codec: 'opus',
-        sampleRate,
+        sampleRate: encoderSampleRate,
         numberOfChannels,
         bitrate: AUDIO_BITRATE,
       });
@@ -1093,9 +1131,16 @@ export function createBroadcaster(opts) {
     ws?.send(
       JSON.stringify({
         type: 'audio-config',
-        config: { codec: 'opus', sampleRate, numberOfChannels },
+        config: { codec: 'opus', sampleRate: encoderSampleRate, numberOfChannels },
       }),
     );
+
+    let audioSamplesCount = 0;
+    const deadAudioTimeout = setTimeout(() => {
+      if (running && audioSamplesCount === 0) {
+        console.warn('[audio] Faixa de som ativa, porém sem amostras entregues pelo navegador após 3s.');
+      }
+    }, 3000);
 
     audioReader = new MediaStreamTrackProcessor({ track }).readable.getReader();
     while (running) {
@@ -1108,15 +1153,28 @@ export function createBroadcaster(opts) {
         break;
       }
 
+      audioSamplesCount++;
+
       if (audioEncoder?.state === 'configured') {
         try {
-          audioEncoder.encode(dados);
+          if (dados.sampleRate === encoderSampleRate) {
+            audioEncoder.encode(dados);
+            dados.close();
+          } else {
+            const resampled = resampleAudioData(dados, encoderSampleRate);
+            dados.close();
+            audioEncoder.encode(resampled);
+            resampled.close();
+          }
         } catch (err) {
           console.warn('[audio encode]', err.message);
+          dados.close();
         }
+      } else {
+        dados.close();
       }
-      dados.close();
     }
+    clearTimeout(deadAudioTimeout);
   }
 
   function onAudioEncoded(chunk) {

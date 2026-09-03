@@ -7,7 +7,7 @@ import {
   sToUs,
 } from '../../shared/latency-policy.js';
 
-export function createAudio({ onError, volume = 1, latencyMode = DEFAULT_LATENCY_MODE } = {}) {
+export function createAudio({ onError, onStateChange, volume = 1, latencyMode = DEFAULT_LATENCY_MODE } = {}) {
   let ctx = null;
   let decoder = null;
   let ganho = null;
@@ -39,6 +39,9 @@ export function createAudio({ onError, volume = 1, latencyMode = DEFAULT_LATENCY
     }
 
     ctx = new AudioContext({ latencyHint: 'interactive', sampleRate: config.sampleRate });
+    ctx.onstatechange = () => {
+      onStateChange?.(ctx?.state || 'closed');
+    };
     ganho = ctx.createGain();
     ganho.gain.value = nivel;
     ganho.connect(ctx.destination);
@@ -64,6 +67,7 @@ export function createAudio({ onError, volume = 1, latencyMode = DEFAULT_LATENCY
     tocou = false;
     underrunCount = 0;
     scheduledChunks.length = 0;
+    onStateChange?.(ctx.state);
     return true;
   }
 
@@ -102,9 +106,9 @@ export function createAudio({ onError, volume = 1, latencyMode = DEFAULT_LATENCY
     dados.close();
 
     const agora = ctx.currentTime;
-    const startupColchaoSec = currentLatency.audioStartupColchaoSec || 0.4;
-    const maxHorizonSec = msToS(currentLatency.audioMaxHorizonMs || 1800);
-    const targetAheadSec = msToS(currentLatency.audioAheadTargetMs || 500);
+    const startupColchaoSec = currentLatency.audioStartupColchaoSec || 0.15;
+    const maxHorizonSec = msToS(currentLatency.audioMaxHorizonMs || 600);
+    const targetAheadSec = msToS(currentLatency.audioAheadTargetMs || 150);
 
     // Fila secou (engasgo ou início): recomeça de agora + colchão suave.
     if (proximo < agora + 0.01) {
@@ -185,7 +189,14 @@ export function createAudio({ onError, volume = 1, latencyMode = DEFAULT_LATENCY
       };
     }
 
-    const elapsedInChunkSec = Math.max(0, Math.min(match.duration, agora - match.startTime));
+    // Calcula a posição física real da apresentação: se ainda não chegou em startTime,
+    // o tempo físico reflete a distância negativa até o início da emissão sonora.
+    let elapsedInChunkSec;
+    if (agora < match.startTime) {
+      elapsedInChunkSec = agora - match.startTime;
+    } else {
+      elapsedInChunkSec = Math.min(match.duration, agora - match.startTime);
+    }
     const mediaTimestampUs = match.mediaTimestampUs + sToUs(elapsedInChunkSec);
     const mediaTimestampMs = usToMs(mediaTimestampUs);
 
@@ -207,6 +218,19 @@ export function createAudio({ onError, volume = 1, latencyMode = DEFAULT_LATENCY
     }
   }
 
+  async function resume() {
+    if (ctx && ctx.state === 'suspended') {
+      try {
+        await ctx.resume();
+      } catch (err) {
+        console.warn('[audio] Falha no resume:', err.message);
+      }
+    }
+    const ok = Boolean(ctx && ctx.state === 'running');
+    onStateChange?.(ctx?.state || 'closed');
+    return ok;
+  }
+
   function stop() {
     if (decoder && decoder.state !== 'closed') {
       try {
@@ -224,12 +248,16 @@ export function createAudio({ onError, volume = 1, latencyMode = DEFAULT_LATENCY
     tocou = false;
     underrunCount = 0;
     scheduledChunks.length = 0;
+    onStateChange?.('closed');
   }
 
   return {
     start,
     push,
     stop,
+    resume,
+    isSuspended: () => Boolean(ctx && ctx.state === 'suspended'),
+    getState: () => ctx?.state || 'closed',
     setVolume,
     setLatencyMode,
     getAudioClock,

@@ -375,4 +375,52 @@ describe('estratégia latest-frame e modos de latência', () => {
     avancar(16.67, 16.67);
     expect(desenhados).toEqual([0, 17]);
   });
+
+  it('audio clock offset does not stall video or trigger hard resync loop', () => {
+    let mockAudioTimeMs = 50000; // Audio clock is 50 seconds offset from video timestamps
+    let keyframeRequested = false;
+    const p = player({
+      latencyMode: 'stable',
+      onNeedKeyframe: () => {
+        keyframeRequested = true;
+      },
+      getAudioClock: () => ({
+        active: true,
+        mediaTimestampMs: mockAudioTimeMs,
+        bufferAheadMs: 500,
+      }),
+    });
+
+    // 1st keyframe arrives with 50s offset: triggers hard resync and requests keyframe
+    p.push(pacote(KEYFRAME, 0));
+    avancar(16);
+    expect(keyframeRequested).toBe(true);
+
+    // Sender responds with requested keyframe (also on host timeline, e.g. 16.67ms)
+    p.push(pacote(KEYFRAME, 16.67));
+    p.push(pacote(DELTA, 33.34));
+
+    avancar(1000, 16.67);
+    expect(desenhados.length).toBeGreaterThan(0);
+  });
+
+  it('audio clock behind video does not stall video playback', () => {
+    let mockAudioTimeMs = 0; // Audio clock starts at 0 while video arrives at 50,000ms
+    const p = player({
+      latencyMode: 'stable',
+      getAudioClock: () => ({
+        active: true,
+        mediaTimestampMs: mockAudioTimeMs,
+        bufferAheadMs: 500,
+      }),
+    });
+
+    p.push(pacote(KEYFRAME, 50000));
+    p.push(pacote(DELTA, 50016.67));
+
+    avancar(1000, 16.67);
+    expect(desenhados.length).toBeGreaterThan(0);
+  });
 });
+
+

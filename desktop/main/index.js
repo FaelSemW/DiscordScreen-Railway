@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { app, BrowserWindow, ipcMain, shell, Tray, Menu, clipboard, nativeImage } from 'electron';
+import { app, BrowserWindow, ipcMain, shell, Tray, Menu, clipboard, nativeImage, session, desktopCapturer } from 'electron';
 import { logger } from './logger.js';
 import { configManager } from './config.js';
 import { processManager, STATES } from './manager.js';
@@ -43,7 +43,7 @@ process.on('uncaughtException', (err) => {
 });
 
 process.on('unhandledRejection', (reason) => {
-  logger.error('Promise rejeitada não tratada no processo principal:', reason);
+  logger.error('Promessa rejeitada sem tratamento no processo principal:', reason);
 });
 
 // Single Instance Lock
@@ -77,6 +77,27 @@ function logEarlyDiagnostics() {
 
 async function initApp() {
   logEarlyDiagnostics();
+
+  // Configura suporte a display media request handler no Electron para captura com áudio
+  if (session?.defaultSession?.setDisplayMediaRequestHandler) {
+    session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+      desktopCapturer
+        .getSources({ types: ['screen', 'window'] })
+        .then((sources) => {
+          if (!sources || sources.length === 0) {
+            callback({});
+            return;
+          }
+          const selectedSource = sources[0];
+          const audioOption = request.audioRequested ? 'loopback' : undefined;
+          callback({ video: selectedSource, audio: audioOption });
+        })
+        .catch((err) => {
+          logger.error('Erro no setDisplayMediaRequestHandler:', err);
+          callback({});
+        });
+    });
+  }
 
   createMainWindow();
   createTray();

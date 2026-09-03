@@ -4,6 +4,7 @@
   "description": "Discord Screen Railway - Private Client",
   "author": "Fael",
   "private": true,
+  "packageManager": "traversal@1.0.0",
   "type": "module",
   "main": "desktop/main/index.js",
   "workspaces": [
