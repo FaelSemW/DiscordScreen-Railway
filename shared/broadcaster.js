@@ -487,6 +487,10 @@ export function createBroadcaster(opts) {
   let startedAt = 0;
   let viewers = 0;
   let statsTimer = null;
+  let audioChunksSentCount = 0;
+  let deadAudioWatchdogTriggered = false;
+  let lastEmittedStats = null;
+  let currentAudioTrack = null;
 
   function updateEncodeTiming(duration) {
     encodeSamples.push(duration);
@@ -739,7 +743,7 @@ export function createBroadcaster(opts) {
       const avgDeltaSize =
         deltaChunksCount > 0 ? Math.round(deltaBytesTotal / deltaChunksCount) : 0;
 
-      onStats?.({
+      lastEmittedStats = {
         viewers,
         preset: currentPreset,
         isAuto: currentPreset === 'automatico',
@@ -816,11 +820,20 @@ export function createBroadcaster(opts) {
         limiter: classifyLimiter(),
         reason: adaptiveReason,
         seconds: Math.floor((Date.now() - startedAt) / 1000),
+        audio: {
+          trackPresent: Boolean(currentAudioTrack || stream?.getAudioTracks?.()?.length),
+          trackSampleRate: currentAudioTrack?.getSettings?.()?.sampleRate ?? null,
+          encoderSampleRate: 48000,
+          chunksSent: audioChunksSentCount,
+          deadAudioWatchdogTriggered,
+        },
         // Campos legados para compatibilidade:
         fps: framesEncoded,
         fpsEntrada: framesEntrada,
         mbps: sentTotalBitrateBps / 1e6,
-      });
+      };
+
+      onStats?.(lastEmittedStats);
 
       // Zera contadores do intervalo
       framesEntrada = 0;
@@ -1135,10 +1148,12 @@ export function createBroadcaster(opts) {
       }),
     );
 
+    currentAudioTrack = track;
     let audioSamplesCount = 0;
     const deadAudioTimeout = setTimeout(() => {
       if (running && audioSamplesCount === 0) {
         console.warn('[audio] Faixa de som ativa, porém sem amostras entregues pelo navegador após 3s.');
+        deadAudioWatchdogTriggered = true;
       }
     }, 3000);
 
@@ -1183,6 +1198,7 @@ export function createBroadcaster(opts) {
     const data = new Uint8Array(chunk.byteLength);
     chunk.copyTo(data);
     audioBytesEncoded += chunk.byteLength;
+    audioChunksSentCount++;
     const buf = empacotar(TIPO_AUDIO, chunk.timestamp ?? 0, data);
     ws.send(buf);
     totalBytesSent += buf.byteLength;
@@ -1934,6 +1950,7 @@ export function createBroadcaster(opts) {
     trocarSom,
     setQuality,
     getSettings,
+    getStats: () => lastEmittedStats,
     temSom: () => Boolean(audioEncoder),
     somBloqueado: () => somBloqueado,
     isRunning: () => running,

@@ -100,6 +100,17 @@ export function createPlayer(
   let lastPresentationLagMs = 0;
   let lastKeyframeAt = 0;
 
+  let keyframeRequestCount = 0;
+  let recentKeyframeRequests = [];
+  let recentHardResyncs = [];
+
+  function pedirKeyframe() {
+    keyframeRequestCount++;
+    recentKeyframeRequests.push(performance.now());
+    needKeyframe = true;
+    onNeedKeyframe?.();
+  }
+
   let fpsTimer = performance.now();
   let receiveFps = 0;
   let renderFps = 0;
@@ -158,8 +169,7 @@ export function createPlayer(
       error: (err) => {
         console.warn('[decoder error]', err.message);
         decoderErrors++;
-        needKeyframe = true;
-        onNeedKeyframe?.();
+        pedirKeyframe();
       },
     });
 
@@ -216,8 +226,7 @@ export function createPlayer(
       framesDropped++;
       droppedRecoveryCount++;
       if (!isKeyframe) {
-        needKeyframe = true;
-        onNeedKeyframe?.();
+        pedirKeyframe();
         return;
       }
     }
@@ -235,8 +244,7 @@ export function createPlayer(
     } catch (err) {
       console.warn('[decode]', err.message);
       decoderErrors++;
-      needKeyframe = true;
-      onNeedKeyframe?.();
+      pedirKeyframe();
     }
   }
 
@@ -265,7 +273,7 @@ export function createPlayer(
       playbackMediaTimeMs = tsMs;
     }
 
-    fila.push({ frame, tsMs, isKeyframe: isKey, captureGapMs: capGap });
+    fila.push({ frame, tsMs, isKeyframe: isKey, captureGapMs: capGap, receivedAt: agora });
 
     const liveFrames = fila.length;
     if (liveFrames > maxLiveFrames) maxLiveFrames = liveFrames;
@@ -378,13 +386,13 @@ export function createPlayer(
             `[HARD_RESYNC] atraso inaceitável (${avDrift}ms), solicitando keyframe para recuperar`,
           );
           hardResyncCount++;
+          recentHardResyncs.push(performance.now());
           esvaziar();
           playbackState = 'BUILDING';
           playbackMediaTimeMs = null;
           wallClockAnchorMs = null;
           audioToVideoOffsetMs = null;
-          needKeyframe = true;
-          onNeedKeyframe?.();
+          pedirKeyframe();
           return;
         }
 
@@ -578,6 +586,9 @@ export function createPlayer(
     }
     decoder = null;
     needKeyframe = true;
+    keyframeRequestCount = 0;
+    recentKeyframeRequests = [];
+    recentHardResyncs = [];
     lastLagMs = 0;
     esvaziar();
     playbackState = 'BUILDING';
@@ -600,7 +611,9 @@ export function createPlayer(
   }
 
   function getSizes() {
-    const rect = canvas.getBoundingClientRect();
+    const rect = canvas.getBoundingClientRect
+      ? canvas.getBoundingClientRect()
+      : { width: canvas.width || 0, height: canvas.height || 0 };
     return {
       video: `${canvas.width}×${canvas.height}`,
       box: `${Math.round(rect.width)}×${Math.round(rect.height)}`,
@@ -627,6 +640,23 @@ export function createPlayer(
 
     const currentlyLiveFrames = Math.max(0, framesDecoded - framesClosed);
 
+    const oldestQueuedFrameAgeMs =
+      fila.length > 0 && fila[0].receivedAt !== undefined
+        ? Math.max(0, Math.round(performance.now() - fila[0].receivedAt))
+        : 0;
+    const lastRenderedFrameAgeMs =
+      lastRenderTime !== null ? Math.max(0, Math.round(performance.now() - lastRenderTime)) : null;
+
+    const oneMinAgo = performance.now() - 60000;
+    recentHardResyncs = recentHardResyncs.filter((t) => t >= oneMinAgo);
+    recentKeyframeRequests = recentKeyframeRequests.filter((t) => t >= oneMinAgo);
+    const hardResyncsPerMinute = recentHardResyncs.length;
+    const keyframeRequestsPerMinute = recentKeyframeRequests.length;
+    const frameBacklogAlarm =
+      oldestQueuedFrameAgeMs > 500 ? 'CRITICAL' : oldestQueuedFrameAgeMs > 250 ? 'WARNING' : 'NORMAL';
+    const pipelineHealth =
+      hardResyncsPerMinute > 2 || keyframeRequestsPerMinute > 6 ? 'DEGRADED' : 'HEALTHY';
+
     return {
       receiveFps,
       decodeFps,
@@ -635,6 +665,13 @@ export function createPlayer(
       chunksSubmittedSec,
       decodeQueueSize: decoder?.decodeQueueSize ?? 0,
       presentationQueueSize: fila.length,
+      oldestQueuedFrameAgeMs,
+      lastRenderedFrameAgeMs,
+      frameBacklogAlarm,
+      hardResyncsPerMinute,
+      keyframeRequestsPerMinute,
+      pipelineHealth,
+      keyframeRequestCount,
       framesReceived,
       framesDecoded,
       framesRendered,
@@ -765,6 +802,7 @@ export function createPlayer(
         : Math.round(receiveIntervalTracker.getStats().jitter),
     getAvDrift: () => lastAvDriftMs,
     getAudioToVideoOffset: () => audioToVideoOffsetMs,
+    getKeyframeRequestCount: () => keyframeRequestCount,
     getMetrics,
     takeFrameCount: () => framesRendered,
     getSizes,

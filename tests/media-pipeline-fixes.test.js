@@ -282,4 +282,151 @@ describe('Media Pipeline Fixes: Stutter, A/V Sync, Tab Audio & iPhone Audio', ()
       player.stop();
     });
   });
+
+  describe('Diagnostics Instrumentation: Alarms & Metric Snapshots', () => {
+    it('reports frame backlog alarms, keyframe request counts, and queue age diagnostics', () => {
+      class MockVideoDecoder {
+        constructor({ output }) {
+          this.output = output;
+          this.decodeQueueSize = 0;
+          this.state = 'unconfigured';
+        }
+        configure() {
+          this.state = 'configured';
+        }
+        decode(chunk) {
+          this.output({
+            timestamp: chunk.timestamp,
+            displayWidth: 1280,
+            displayHeight: 720,
+            close: vi.fn(),
+          });
+        }
+        close() {
+          this.state = 'closed';
+        }
+      }
+
+      globalThis.VideoDecoder = MockVideoDecoder;
+      globalThis.requestAnimationFrame = vi.fn();
+      globalThis.cancelAnimationFrame = vi.fn();
+
+      const mockCanvas = {
+        width: 1280,
+        height: 720,
+        getContext: () => ({
+          drawImage: vi.fn(),
+          fillRect: vi.fn(),
+        }),
+      };
+
+      let keyframesRequested = 0;
+      const player = createPlayer(mockCanvas, {
+        onNeedKeyframe: () => {
+          keyframesRequested++;
+        },
+        latencyMode: 'stable',
+      });
+
+      player.start({ codec: 'avc1.42E01E', width: 1280, height: 720 });
+
+      // Initial metrics check
+      const initialMetrics = player.getMetrics();
+      expect(initialMetrics.frameBacklogAlarm).toBe('NORMAL');
+      expect(initialMetrics.keyframeRequestCount).toBe(0);
+      expect(initialMetrics.hardResyncsPerMinute).toBe(0);
+      expect(initialMetrics.pipelineHealth).toBe('HEALTHY');
+
+      // Push a frame
+      const buf = new ArrayBuffer(20);
+      const view = new DataView(buf);
+      view.setUint8(0, 0); // slot
+      view.setUint8(1, 1); // keyframe
+      view.setFloat64(2, 1000000); // 1s
+      view.setFloat64(10, Date.now());
+
+      player.push(buf, true, 16);
+
+      const runningMetrics = player.getMetrics();
+      expect(runningMetrics.presentationQueueSize).toBe(1);
+      expect(runningMetrics.oldestQueuedFrameAgeMs).toBeGreaterThanOrEqual(0);
+      expect(runningMetrics.frameBacklogAlarm).toBe('NORMAL');
+
+      player.stop();
+    });
+
+    it('accurately tracks chunksReceivedCount in audio player', () => {
+      class MockAudioContext {
+        constructor() {
+          this.currentTime = 0;
+          this.state = 'running';
+          this.destination = {};
+        }
+        createGain() {
+          return {
+            connect: vi.fn(),
+            gain: { setTargetAtTime: vi.fn() },
+          };
+        }
+        createBuffer() {
+          return {
+            copyToChannel: vi.fn(),
+          };
+        }
+        createBufferSource() {
+          return {
+            buffer: null,
+            connect: vi.fn(),
+            start: vi.fn(),
+            stop: vi.fn(),
+            onended: null,
+          };
+        }
+        resume() {
+          this.state = 'running';
+          return Promise.resolve();
+        }
+        close() {
+          this.state = 'closed';
+          return Promise.resolve();
+        }
+      }
+
+      class MockAudioDecoder {
+        constructor({ output }) {
+          this.output = output;
+          this.state = 'unconfigured';
+        }
+        configure() {
+          this.state = 'configured';
+        }
+        decode() {}
+        close() {
+          this.state = 'closed';
+        }
+      }
+
+      globalThis.AudioContext = MockAudioContext;
+      globalThis.AudioDecoder = MockAudioDecoder;
+
+      const audio = createAudio();
+      audio.start({ codec: 'opus', sampleRate: 48000, numberOfChannels: 2 });
+
+      expect(audio.getChunksReceived()).toBe(0);
+
+      const fakeBuffer = new ArrayBuffer(20);
+      const view = new DataView(fakeBuffer);
+      view.setFloat64(2, 1000000);
+      view.setFloat64(10, Date.now());
+
+      audio.push(fakeBuffer);
+      audio.push(fakeBuffer);
+      audio.push(fakeBuffer);
+
+      expect(audio.getChunksReceived()).toBe(3);
+
+      audio.stop();
+      expect(audio.getChunksReceived()).toBe(0);
+    });
+  });
 });

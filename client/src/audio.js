@@ -16,6 +16,7 @@ export function createAudio({ onError, onStateChange, volume = 1, latencyMode = 
   let tocou = false;
   let lastLagMs = 0;
   let underrunCount = 0;
+  let chunksReceivedCount = 0;
 
   let currentLatency = getLatencyConfig(latencyMode);
 
@@ -75,6 +76,7 @@ export function createAudio({ onError, onStateChange, volume = 1, latencyMode = 
   function push(buffer) {
     if (!decoder || decoder.state !== 'configured') return;
 
+    chunksReceivedCount++;
     const view = new DataView(buffer);
     const timestampUs = view.getFloat64(2);
     const sentAt = view.getFloat64(10);
@@ -247,6 +249,7 @@ export function createAudio({ onError, onStateChange, volume = 1, latencyMode = 
     proximo = 0;
     tocou = false;
     underrunCount = 0;
+    chunksReceivedCount = 0;
     scheduledChunks.length = 0;
     onStateChange?.('closed');
   }
@@ -264,5 +267,6 @@ export function createAudio({ onError, onStateChange, volume = 1, latencyMode = 
     temSom: () => tocou,
     getLag: () => lastLagMs,
     getUnderruns: () => underrunCount,
+    getChunksReceived: () => chunksReceivedCount,
   };
 }

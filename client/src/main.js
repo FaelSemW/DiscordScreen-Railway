@@ -219,8 +219,11 @@ function updateDebugOverlay() {
     $('dbg-pres-max-gap').textContent = `${m.presentation?.maxGap || 0} ms`;
   if ($('dbg-pres-drops'))
     $('dbg-pres-drops').textContent = `${m.presentation?.droppedLate || 0} atraso / ${m.presentation?.droppedRecovery || 0} rec`;
-  if ($('dbg-pres-drift-lat'))
-    $('dbg-pres-drift-lat').textContent = `${m.presentation?.avDriftMs || 0} ms / ${m.streamLatency?.estimatedEndToEndMs || 0} ms`;
+  if ($('dbg-pres-drift-lat')) {
+    const offset = s?.player?.getAudioToVideoOffset?.() ?? 0;
+    const alarm = m.frameBacklogAlarm || 'NORMAL';
+    $('dbg-pres-drift-lat').textContent = `${m.presentation?.avDriftMs || 0} ms (off: ${offset}ms, ${alarm}) / ${m.streamLatency?.estimatedEndToEndMs || 0} ms`;
+  }
   if ($('dbg-pres-resync'))
     $('dbg-pres-resync').textContent = `${m.presentation?.hardResyncCount || 0} hard / ${m.presentation?.softCorrectionCount || 0} soft`;
 
@@ -265,30 +268,127 @@ function updateDebugOverlay() {
   }
 }
 
-function copyStutterLog() {
+function getDiagnosticSnapshot() {
   const s = activeSlot !== null ? streams.get(activeSlot) : [...streams.values()][0];
-  const metrics = s?.player?.getMetrics() || {};
+  const m = s?.player?.getMetrics?.() || {};
+  const a = s?.audio?.getAudioClock?.() || {};
+  const hostStats = myBroadcast?.getStats?.() || null;
+
+  const oldestQueuedFrameAgeMs = m.oldestQueuedFrameAgeMs ?? 0;
+  const frameBacklogAlarm =
+    m.frameBacklogAlarm ??
+    (oldestQueuedFrameAgeMs > 500 ? 'CRITICAL' : oldestQueuedFrameAgeMs > 250 ? 'WARNING' : 'NORMAL');
+
   const report = {
     capturedAt: new Date().toISOString(),
-    inDiscord,
-    userAgent: navigator.userAgent,
-    devicePixelRatio: window.devicePixelRatio,
-    viewport: `${window.innerWidth}x${window.innerHeight}`,
-    activeSlot,
-    metrics,
-    recentStutterEvents: window.__STUTTER_EVENTS || [],
+    environment: {
+      inDiscord,
+      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
+      devicePixelRatio: typeof window !== 'undefined' ? window.devicePixelRatio : 1,
+      viewport: typeof window !== 'undefined' ? `${window.innerWidth}x${window.innerHeight}` : '1920x1080',
+    },
+    stream: {
+      sessionId: curRoom?.id || Gt?.roomId || 'local',
+      streamAgeSeconds: s?.startedAt
+        ? Math.floor((Date.now() - s.startedAt) / 1000)
+        : hostStats?.seconds ?? 0,
+      selectedSourceType: s?.fonte || myBroadcast?.fonte || 'tela',
+      resolution: s?.canvas
+        ? `${s.canvas.width}x${s.canvas.height}`
+        : hostStats?.target
+          ? `${hostStats.target.width}x${hostStats.target.height}`
+          : 'unknown',
+      configuredFps: s?.preset?.fps || hostStats?.target?.fps || 60,
+    },
+    videoHost: {
+      captureFps: hostStats?.capture?.capturedFps ?? hostStats?.fpsEntrada ?? null,
+      encodeFps: hostStats?.encoder?.outputFps ?? hostStats?.fps ?? null,
+      sentFps: hostStats?.network?.sentFps ?? null,
+      encodeDurationAvgMs: hostStats?.encoder?.avgEncodeMs ?? null,
+      encodeDurationP95Ms: hostStats?.encoder?.p95EncodeMs ?? null,
+      encodedBitrateBps: hostStats?.bitrate?.encodedBps ?? null,
+      outboundBufferedAmountBytes: hostStats?.network?.wsBufferedBytes ?? (ws?.bufferedAmount ?? 0),
+      videoFrameDrops: hostStats
+        ? (hostStats.capture?.framesSkipped ?? 0) + (hostStats.encoder?.droppedPressure ?? 0)
+        : null,
+    },
+    videoViewer: {
+      receivedFps: m.receiveFps ?? null,
+      decodedFps: m.decodeFps ?? null,
+      renderedFps: m.renderFps ?? null,
+      decodeQueueSize: m.decodeQueueSize ?? 0,
+      renderQueueLength: m.presentationQueueSize ?? 0,
+      oldestQueuedFrameAgeMs,
+      decodeDurationAvgMs: m.decoder?.p50 ?? null,
+      decodeDurationP95Ms: m.decoder?.p95 ?? null,
+      renderDurationAvgMs: m.canvas?.drawAvgMs ?? null,
+      renderIntervalP95Ms: m.presentation?.p95 ?? null,
+      lastRenderedFrameAgeMs: m.lastRenderedFrameAgeMs ?? null,
+    },
+    av: {
+      audioToVideoOffsetMs: s?.player?.getAudioToVideoOffset?.() ?? null,
+      currentAvDriftMs: s?.player?.getAvDrift?.() ?? m.avDriftMs ?? null,
+      avSkew: `${s?.player?.getAvDrift?.() ?? m.avDriftMs ?? 0} ms`,
+      hardResyncCount: m.hardResyncCount ?? 0,
+      keyframeRequestCount: m.keyframeRequestCount ?? (s?.player?.getKeyframeRequestCount?.() ?? 0),
+    },
+    audioHost: {
+      audioTrackPresent: hostStats?.audio?.trackPresent ?? (myBroadcast?.temSom?.() ?? false),
+      audioTrackSampleRate: hostStats?.audio?.trackSampleRate ?? null,
+      encoderSampleRate: hostStats?.audio?.encoderSampleRate ?? 48000,
+      audioChunksSent: hostStats?.audio?.chunksSent ?? null,
+      deadAudioWatchdogStatus: hostStats?.audio?.deadAudioWatchdogTriggered ? 'TRIGGERED' : 'OK',
+    },
+    audioViewer: {
+      audioChunksReceived: s?.audio?.getChunksReceived?.() ?? null,
+      audioContextState: s?.audio?.getState?.() ?? (typeof AudioContext !== 'undefined' ? 'unknown' : 'unsupported'),
+      audioBufferDepthMs: m.audio?.bufferedMs ?? (a?.bufferAheadMs ? Math.round(a.bufferAheadMs) : 0),
+      underrunCount: m.audio?.underruns ?? (a?.underrunCount ?? (s?.audio?.getUnderruns?.() ?? 0)),
+    },
+    ios: {
+      audioContextState: s?.audio?.getState?.() ?? 'closed',
+      audioUnlockRequired: s?.audio?.isSuspended?.() ?? false,
+      audioUnlockAttempted: typeof window !== 'undefined' ? Boolean(window.__IOS_UNLOCK_ATTEMPTED) : false,
+      audioUnlockResult:
+        (typeof window !== 'undefined' && window.__IOS_UNLOCK_RESULT) ||
+        (s?.audio?.isSuspended?.() ? 'PENDING' : 'READY'),
+    },
+    transport: {
+      wsBufferedAmount: ws?.bufferedAmount ?? 0,
+      messagesPerSec: transportMessagesPerSec,
+      bytesPerSec: transportBytesPerSec,
+    },
+    alarms: {
+      frameBacklogAlarm,
+      hardResyncsPerMinute: m.hardResyncsPerMinute ?? 0,
+      keyframeRequestsPerMinute: m.keyframeRequestsPerMinute ?? 0,
+      pipelineHealth: m.pipelineHealth ?? 'HEALTHY',
+    },
+    metrics: m,
+    recentStutterEvents: (typeof window !== 'undefined' && window.__STUTTER_EVENTS) || [],
   };
 
+  return report;
+}
+
+function copyStutterLog() {
+  const report = getDiagnosticSnapshot();
   const json = JSON.stringify(report, null, 2);
-  navigator.clipboard.writeText(json).then(() => {
-    toast('Relatório forense copiado para a área de transferência!');
-  }).catch(() => {
+  if (navigator?.clipboard?.writeText) {
+    navigator.clipboard.writeText(json).then(() => {
+      toast('Diagnóstico copiado para a área de transferência (JSON)!');
+    }).catch(() => {
+      console.log('[DIAGNOSTIC_REPORT_JSON]', json);
+      toast('Diagnóstico impresso no console (copie pelo F12)');
+    });
+  } else {
     console.log('[DIAGNOSTIC_REPORT_JSON]', json);
-    toast('Relatório impresso no console (copie pelo F12)');
-  });
+    toast('Diagnóstico impresso no console (copie pelo F12)');
+  }
 }
 if (typeof window !== 'undefined') {
   window.copyStutterLog = copyStutterLog;
+  window.__GET_DIAGNOSTICS_REPORT = getDiagnosticSnapshot;
 }
 
 // ------------------------------------------------------------------- helpers
@@ -1307,7 +1407,9 @@ function atualizarAudioUnlock(slot) {
       btn.textContent = '🔊 Toque para ativar o áudio';
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
-        await s.audio?.resume();
+        if (typeof window !== 'undefined') window.__IOS_UNLOCK_ATTEMPTED = true;
+        const res = await s.audio?.resume();
+        if (typeof window !== 'undefined') window.__IOS_UNLOCK_RESULT = res ? 'SUCCESS' : 'FAILED';
         atualizarAudioUnlock(slot);
       });
       tile.append(btn);
@@ -1320,7 +1422,16 @@ function atualizarAudioUnlock(slot) {
 function tentarDesbloquearAudioGlobal() {
   for (const [slot, s] of streams.entries()) {
     if (s.audio?.isSuspended()) {
-      s.audio.resume().then(() => atualizarAudioUnlock(slot)).catch(() => {});
+      if (typeof window !== 'undefined') window.__IOS_UNLOCK_ATTEMPTED = true;
+      s.audio
+        .resume()
+        .then((res) => {
+          if (typeof window !== 'undefined') window.__IOS_UNLOCK_RESULT = res ? 'SUCCESS' : 'FAILED';
+          atualizarAudioUnlock(slot);
+        })
+        .catch(() => {
+          if (typeof window !== 'undefined') window.__IOS_UNLOCK_RESULT = 'FAILED';
+        });
     }
   }
 }
@@ -2246,7 +2357,25 @@ function connect() {
     }
   });
 
+  let transportMessagesCount = 0;
+  let transportBytesCount = 0;
+  let transportLastWindowTime = performance.now();
+  let transportMessagesPerSec = 0;
+  let transportBytesPerSec = 0;
+
   ws.addEventListener('message', (e) => {
+    transportMessagesCount++;
+    transportBytesCount += typeof e.data === 'string' ? e.data.length : e.data.byteLength;
+    const now = performance.now();
+    if (now - transportLastWindowTime >= 1000) {
+      const elapsed = (now - transportLastWindowTime) / 1000;
+      transportMessagesPerSec = Math.round(transportMessagesCount / elapsed);
+      transportBytesPerSec = Math.round(transportBytesCount / elapsed);
+      transportMessagesCount = 0;
+      transportBytesCount = 0;
+      transportLastWindowTime = now;
+    }
+
     // Primeiro byte é o slot, segundo é o tipo: um diz de quem, o outro diz
     // para qual decodificador — som e imagem dividem o mesmo canal.
     if (typeof e.data !== 'string') {
