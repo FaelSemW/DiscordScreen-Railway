@@ -775,8 +775,13 @@ function buildTile(p, { palco = false, semVideo = false, slot: slotDado = null }
   // Com a forma do vídeo no próprio tile, a moldura passa a abraçar a imagem.
   // Sem isto, uma tela 16:9 dentro de um palco largo e baixo encolhia até caber
   // na altura e sobrava um retângulo preto ocupando metade da área.
+  //
+  // Em tela cheia (ACTIVITY_FULLSCREEN) o inline aspect-ratio é omitido:
+  // a regra CSS .grid.palco.cheia .tile-palco remove a restrição e o canvas
+  // já lida com a proporção via object-fit:contain. Misturar os dois faria o
+  // estilo inline sobrescrever o CSS e reintroduzir as margens pretas.
   const medida = stream ? medidaDe(stream) : null;
-  if (palco && medida?.w) {
+  if (palco && medida?.w && !telaCheia) {
     tile.style.aspectRatio = `${medida.w} / ${medida.h}`;
   }
 
@@ -3056,6 +3061,16 @@ $('fullscreen')?.addEventListener('click', async () => {
   renderGrid();
 });
 
+// Quando o navegador sai do fullscreen nativo (ESC, botão do SO, etc.) sem
+// passar pelo botão da interface, `telaCheia` ficaria verdadeiro para sempre.
+// Este listener mantém o estado em sincronia com o documento.
+document.addEventListener('fullscreenchange', () => {
+  if (!document.fullscreenElement && telaCheia) {
+    telaCheia = false;
+    renderGrid();
+  }
+});
+
 window.addEventListener('keydown', (e) => {
   if (e.shiftKey && (e.key === 'D' || e.key === 'd')) {
     e.preventDefault();
@@ -3095,6 +3110,14 @@ if (window.ResizeObserver) {
   });
   const gridEl = $('grid');
   if (gridEl) gridObserver.observe(gridEl);
+}
+
+// visualViewport cobre mudanças de tamanho do iframe da Activity que o
+// ResizeObserver do grid pode não detectar (e.g. Discord encolhendo o painel).
+if (typeof visualViewport !== 'undefined') {
+  visualViewport.addEventListener('resize', () => {
+    if (telaCheia && inRoom()) renderGrid();
+  });
 }
 
 // Aplica preferências iniciais salvas
