@@ -75,27 +75,110 @@ function logEarlyDiagnostics() {
   logger.info('==================================================');
 }
 
+let pendingDisplayMediaCallback = null;
+let cachedSources = [];
+let pickerWindow = null;
+const captureWindows = new Set();
+
+export async function openCaptureInElectron(captureUrl) {
+  if (!captureUrl) return false;
+  try {
+    const win = new BrowserWindow({
+      width: 1040,
+      height: 760,
+      minWidth: 800,
+      minHeight: 600,
+      title: 'Transmissão - Discord Screen Railway',
+      backgroundColor: '#0c0e14',
+      webPreferences: {
+        preload: path.join(__dirname, 'preload.js'),
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: false,
+      },
+    });
+
+    captureWindows.add(win);
+    win.on('closed', () => captureWindows.delete(win));
+    await win.loadURL(captureUrl);
+    return true;
+  } catch (err) {
+    logger.error(`Erro ao abrir janela de transmissão no Electron: ${err.message}`);
+    if (shell) await shell.openExternal(captureUrl);
+    return false;
+  }
+}
+
+function showSourcePicker(request, callback) {
+  pendingDisplayMediaCallback = callback;
+
+  desktopCapturer
+    .getSources({
+      types: ['screen', 'window'],
+      thumbnailSize: { width: 360, height: 200 },
+      fetchWindowIcons: true,
+    })
+    .then((sources) => {
+      cachedSources = sources || [];
+
+      if (pickerWindow && !pickerWindow.isDestroyed()) {
+        pickerWindow.focus();
+        pickerWindow.webContents.send('sources-updated');
+        return;
+      }
+
+      pickerWindow = new BrowserWindow({
+        width: 720,
+        height: 560,
+        minWidth: 600,
+        minHeight: 480,
+        title: 'Compartilhar Tela',
+        parent: mainWindow && !mainWindow.isDestroyed() ? mainWindow : undefined,
+        modal: Boolean(mainWindow && !mainWindow.isDestroyed()),
+        show: false,
+        frame: false,
+        backgroundColor: '#0c0e14',
+        webPreferences: {
+          preload: path.join(__dirname, 'preload.js'),
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: false,
+        },
+      });
+
+      pickerWindow.loadFile(path.join(__dirname, '..', 'ui', 'picker.html'));
+      pickerWindow.once('ready-to-show', () => {
+        pickerWindow.show();
+      });
+
+      pickerWindow.on('closed', () => {
+        pickerWindow = null;
+        if (pendingDisplayMediaCallback) {
+          pendingDisplayMediaCallback({});
+          pendingDisplayMediaCallback = null;
+        }
+      });
+    })
+    .catch((err) => {
+      logger.error('Erro ao buscar fontes no setDisplayMediaRequestHandler:', err);
+      callback({});
+      pendingDisplayMediaCallback = null;
+    });
+}
+
 async function initApp() {
   logEarlyDiagnostics();
 
-  // Configura suporte a display media request handler no Electron para captura com áudio
+  // Configura suporte a display media request handler no Electron com seletor customizado e áudio loopback
   if (session?.defaultSession?.setDisplayMediaRequestHandler) {
     session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
-      desktopCapturer
-        .getSources({ types: ['screen', 'window'] })
-        .then((sources) => {
-          if (!sources || sources.length === 0) {
-            callback({});
-            return;
-          }
-          const selectedSource = sources[0];
-          const audioOption = request.audioRequested ? 'loopback' : undefined;
-          callback({ video: selectedSource, audio: audioOption });
-        })
-        .catch((err) => {
-          logger.error('Erro no setDisplayMediaRequestHandler:', err);
-          callback({});
-        });
+      showSourcePicker(request, callback);
+    });
+  }
+
+  if (session?.defaultSession?.setPermissionRequestHandler) {
+    session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+      callback(true);
     });
   }
 
@@ -225,7 +308,7 @@ function updateTrayMenu() {
       click: async () => {
         try {
           const shareUrl = await processManager.createStreamingSession();
-          await openCapturePage(shareUrl);
+          await openCaptureInElectron(shareUrl);
         } catch (err) {
           logger.error('Erro ao abrir compartilhamento:', err);
         }
@@ -351,8 +434,70 @@ function setupIpc() {
         return { ok: false, error: err.message };
       }
     }
-    const opened = await openCapturePage(target);
+    const opened = await openCaptureInElectron(target);
     return { ok: opened };
+  });
+
+  ipcMain.handle('picker-get-sources', async () => {
+    try {
+      if (!cachedSources || cachedSources.length === 0) {
+        cachedSources = await desktopCapturer.getSources({
+          types: ['screen', 'window'],
+          thumbnailSize: { width: 360, height: 200 },
+          fetchWindowIcons: true,
+        });
+      }
+      return cachedSources.map((s) => ({
+        id: s.id,
+        name: s.name,
+        display_id: s.display_id,
+        thumbnailDataUrl: s.thumbnail ? s.thumbnail.toDataURL() : '',
+        appIconDataUrl: s.appIcon ? s.appIcon.toDataURL() : null,
+      }));
+    } catch (err) {
+      logger.error('Erro ao obter fontes para o picker:', err);
+      return [];
+    }
+  });
+
+  ipcMain.handle('picker-select-source', (_event, { sourceId, shareAudio }) => {
+    if (!pendingDisplayMediaCallback) return false;
+    const source = cachedSources.find((s) => s.id === sourceId);
+    if (!source) {
+      pendingDisplayMediaCallback({});
+      pendingDisplayMediaCallback = null;
+      if (pickerWindow && !pickerWindow.isDestroyed()) pickerWindow.close();
+      return false;
+    }
+
+    const isScreen = source.id.startsWith('screen:');
+    // Para tela inteira: loopback do sistema (sem mutar áudio local).
+    // Para janela: objeto da própria janela para capturar áudio isolado.
+    const audioOption = shareAudio ? (isScreen ? 'loopback' : source) : undefined;
+
+    logger.info(
+      `[SourcePicker] Selecionado: "${source.name}" (screen=${isScreen}, audio=${audioOption || 'none'})`,
+    );
+
+    const cb = pendingDisplayMediaCallback;
+    pendingDisplayMediaCallback = null;
+    cb({ video: source, audio: audioOption });
+
+    if (pickerWindow && !pickerWindow.isDestroyed()) {
+      pickerWindow.close();
+    }
+    return true;
+  });
+
+  ipcMain.handle('picker-cancel', () => {
+    if (pendingDisplayMediaCallback) {
+      pendingDisplayMediaCallback({});
+      pendingDisplayMediaCallback = null;
+    }
+    if (pickerWindow && !pickerWindow.isDestroyed()) {
+      pickerWindow.close();
+    }
+    return true;
   });
 
   ipcMain.handle('open-discord', async () => {

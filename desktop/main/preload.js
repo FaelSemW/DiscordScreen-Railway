@@ -24,6 +24,9 @@ const api = {
   windowMinimize: () => ipcRenderer.invoke('window-minimize'),
   windowMaximize: () => ipcRenderer.invoke('window-maximize'),
   windowClose: () => ipcRenderer.invoke('window-close'),
+  getMediaSources: () => ipcRenderer.invoke('picker-get-sources'),
+  selectMediaSource: (data) => ipcRenderer.invoke('picker-select-source', data),
+  cancelMediaSource: () => ipcRenderer.invoke('picker-cancel'),
   onStateChange: (callback) => {
     const handler = (_event, state) => callback(state);
     ipcRenderer.on('state-change', handler);

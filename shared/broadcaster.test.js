@@ -1172,15 +1172,15 @@ describe('som', () => {
     expect(b.temSom()).toBe(true);
   });
 
-  it('mata o som da tela inteira, que traria o Discord de volta em eco', async () => {
+  it('permite o som da tela inteira (loopback do sistema ou monitor)', async () => {
     const onAviso = vi.fn();
     const stream = comSom('monitor');
 
     const { b } = await noAr({ audio: true, onAviso }, stream);
 
-    expect(b.somBloqueado()).toBe(true);
-    expect(stream.getAudioTracks()).toHaveLength(0);
-    expect(onAviso).toHaveBeenCalledWith(expect.stringMatching(/tela inteira carrega o som/));
+    expect(b.somBloqueado()).toBe(false);
+    expect(stream.getAudioTracks()).toHaveLength(1);
+    expect(onAviso).not.toHaveBeenCalled();
   });
 
   it('mata o som de janela onde o navegador não sabe isolá-lo', async () => {
@@ -1221,10 +1221,10 @@ describe('som', () => {
     expect(onAviso).toHaveBeenCalledWith(expect.stringMatching(/de onde vinha esse som/));
   });
 
-  it('pede a captura escopando o som à janela e recusando o do sistema', async () => {
+  it('pede a captura com suporte a som de janela e sistema', async () => {
     await noAr({ audio: true }, comSom('browser'));
 
-    expect(capturas[0]).toMatchObject({ windowAudio: 'window', systemAudio: 'exclude' });
+    expect(capturas[0]).toMatchObject({ windowAudio: 'window', systemAudio: 'include' });
     expect(capturas[0].audio).toMatchObject({ echoCancellation: false, restrictOwnAudio: true });
   });
 

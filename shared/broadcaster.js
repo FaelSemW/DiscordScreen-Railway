@@ -265,7 +265,7 @@ export function restricoesDeSom() {
     noiseSuppression: false,
     autoGainControl: false,
   };
-  if (navigator.mediaDevices.getSupportedConstraints?.().restrictOwnAudio) {
+  if (typeof navigator !== 'undefined' && navigator.mediaDevices?.getSupportedConstraints?.()?.restrictOwnAudio) {
     c.restrictOwnAudio = true;
   }
   return c;
@@ -297,7 +297,7 @@ export function opcoesTela({ fps = 60, width, height, comSom = false, video } = 
   };
   if (comSom) {
     opts.windowAudio = 'window';
-    opts.systemAudio = 'exclude';
+    opts.systemAudio = 'include';
   }
   return opts;
 }
@@ -962,14 +962,21 @@ export function createBroadcaster(opts) {
     if (!audio) return null;
 
     const faixa = capturado.getAudioTracks()[0];
-    if (!faixa) return null;
-
     const superficie = videoTrack.getSettings?.().displaySurface;
     console.info(
-      `[capture diagnostics] superficie=${superficie || 'indefinida'} videoTracks=${capturado.getVideoTracks().length} audioTracks=${capturado.getAudioTracks().length} audioReadyState=${faixa.readyState} audioEnabled=${faixa.enabled} audioMuted=${faixa.muted}`,
+      `[capture diagnostics] superficie=${superficie || 'indefinida'} videoTracks=${capturado.getVideoTracks().length} audioTracks=${capturado.getAudioTracks().length} audioReadyState=${faixa?.readyState} audioEnabled=${faixa?.enabled} audioMuted=${faixa?.muted}`,
     );
 
-    if (somIsolado(superficie)) {
+    if (!faixa) {
+      if (superficie === 'monitor') {
+        onAviso?.(
+          'Áudio do sistema não disponível neste navegador/modo. Use o aplicativo DC-ScreenSharing para compartilhar o áudio completo do PC.',
+        );
+      }
+      return null;
+    }
+
+    if (somPermitido(superficie)) {
       somBloqueado = false;
       return faixa;
     }
@@ -982,10 +989,12 @@ export function createBroadcaster(opts) {
     return null;
   }
 
-  /** A superfície escolhida entrega som sem levar o Discord junto? */
-  function somIsolado(superficie) {
+  /** A superfície escolhida entrega som suportado? */
+  function somPermitido(superficie) {
     if (superficie === 'browser') return true;
-    return superficie === 'window' && somDeJanelaConfiavel();
+    if (superficie === 'window') return somDeJanelaConfiavel();
+    if (superficie === 'monitor' || !superficie) return true;
+    return true;
   }
 
   /** Por que o som que veio foi barrado, e por onde sair disso. */

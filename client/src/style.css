@@ -22,8 +22,12 @@
 
 html,
 body {
+  width: 100%;
   height: 100%;
+  min-width: 0;
+  min-height: 0;
   margin: 0;
+  padding: 0;
 }
 
 body {
@@ -35,9 +39,12 @@ body {
 
 #app {
   position: relative;
-  width: 100vw;
-  height: 100dvh;
-  min-height: 100%;
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  min-width: 0;
+  min-height: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -90,32 +97,45 @@ body {
 }
 
 .tile-palco {
-  width: 100%;
-  height: 100%;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 100% !important;
+  max-height: 100% !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  aspect-ratio: unset !important;
   border-radius: 0;
   background: #000;
-}
-
-/* Tela cheia: remove totalmente barras laterais */
-.grid.palco.cheia {
-  grid-template-columns: minmax(0, 1fr);
+  margin: 0;
   padding: 0;
 }
 
+/* Single stream mode / Fullscreen: remove totalmente barras laterais */
+.grid.palco.single-stream,
+.grid.palco.cheia {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+  padding: 0;
+  margin: 0;
+  gap: 0;
+}
+
+.grid.palco.single-stream .tile,
 .grid.palco.cheia .tile {
   border-radius: 0;
 }
 
-/* ACTIVITY_FULLSCREEN: remove the source-aspect-ratio constraint from the palco
-   tile so it expands to fill the entire Activity viewport.
-   The canvas inside already uses object-fit:contain + position:absolute+inset:0,
-   so proportional letterboxing is handled by the canvas — not the tile box.
-   Without this rule the tile's inline aspect-ratio causes large black margins
-   outside the tile (the grid background) while the canvas itself looks fine. */
+/* ACTIVITY_FULLSCREEN / SINGLE_STREAM: remove aspect-ratio constraints
+   from the palco tile so it expands to fill 100% of the Activity viewport.
+   Proportional letterboxing is handled by canvas with object-fit: contain. */
+.grid.palco .tile-palco,
+.grid.palco.single-stream .tile-palco,
 .grid.palco.cheia .tile-palco {
-  aspect-ratio: unset;
-  width: 100%;
-  height: 100%;
+  aspect-ratio: unset !important;
+  width: 100% !important;
+  height: 100% !important;
+  max-width: 100% !important;
+  max-height: 100% !important;
 }
 
 .sidebar {
@@ -751,11 +771,15 @@ button {
   bottom: 12px;
 }
 
-/* Com a lateral no ar o palco não é a janela inteira, e uma barra centrada na
-   janela aparece visivelmente à direita do vídeo. O recuo é a lateral mais o
-   divisor — as mesmas medidas que a grade usa nas colunas. */
-#app.flutua.palco:not(.cheia) .bottombar {
+/* Com a lateral no ar (apenas em multi-stream sem tela cheia), o palco não é a janela inteira. */
+#app.flutua.palco:not(.cheia):not(.single-stream) .bottombar {
   right: calc(var(--strip, 300px) + 10px);
+}
+
+#app.flutua.palco.single-stream .bottombar,
+#app.flutua.palco.cheia .bottombar {
+  right: 0;
+  left: 0;
 }
 
 /* Vale sempre que as barras flutuam, com transmissão ou sem: elas cobrem a

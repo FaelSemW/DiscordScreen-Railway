@@ -654,15 +654,20 @@ function renderGrid() {
   const podeIrAoSite = inDiscord && noPalco && Boolean(origemDoSite());
   $('watchSite').hidden = !podeIrAoSite;
 
-  if (!hasPeople) return;
+  const outras = entradasDoGrid().filter((e) => e.slot !== null && e.slot !== activeSlot);
+  const isSingleStream = noPalco && outras.length === 0;
 
+  // Single stream mode: quando há apenas 1 stream na sala, o palco consome 100%
+  // da área do viewport do Discord sem barras laterais reservando espaço.
+  $('app').classList.toggle('single-stream', isSingleStream);
   grid.classList.toggle('palco', noPalco);
+  grid.classList.toggle('single-stream', isSingleStream);
   grid.classList.toggle('cheia', noPalco && telaCheia);
 
   // Com a lateral no ar, a contagem no topo repete o que está logo ali — e
   // custa uma faixa inteira de altura, que é o que falta para a tela. Vazia, a
-  // barra de cima se recolhe sozinha.
-  $('people').hidden = noPalco && !telaCheia;
+  // barra de cima se recolhe sozinha. Em single-stream o palco consome tudo.
+  $('people').hidden = noPalco && (!telaCheia && !isSingleStream);
 
   // Os canvas são reanexados abaixo; removê-los daqui não perde o conteúdo.
   grid.replaceChildren();
@@ -685,7 +690,9 @@ function renderGrid() {
   // mostrando — e um dos dois fica preto, conforme a ordem do desenho.
   grid.append(buildTile(emCena, { palco: true, slot: activeSlot }).el);
 
-  if (telaCheia) return;
+  // Se estiver em tela cheia OU em modo single stream (única transmissão ativa),
+  // o palco já consome 100% do viewport do Discord — não anexa sidebar.
+  if (telaCheia || isSingleStream) return;
 
   applyStrip();
   grid.append(divider, buildSidebar());
@@ -772,16 +779,12 @@ function buildTile(p, { palco = false, semVideo = false, slot: slotDado = null }
   if (palco) tile.classList.add('tile-palco');
   if (slot !== null) tile.dataset.slot = String(slot);
 
-  // Com a forma do vídeo no próprio tile, a moldura passa a abraçar a imagem.
-  // Sem isto, uma tela 16:9 dentro de um palco largo e baixo encolhia até caber
-  // na altura e sobrava um retângulo preto ocupando metade da área.
-  //
-  // Em tela cheia (ACTIVITY_FULLSCREEN) o inline aspect-ratio é omitido:
-  // a regra CSS .grid.palco.cheia .tile-palco remove a restrição e o canvas
-  // já lida com a proporção via object-fit:contain. Misturar os dois faria o
-  // estilo inline sobrescrever o CSS e reintroduzir as margens pretas.
+  // Para o palco (.tile-palco), NUNCA definimos aspect-ratio inline: o container
+  // deve preencher 100% da área disponível do viewport do Discord, e o canvas
+  // interno gerencia a proporção e letterboxing perfeito via object-fit: contain.
+  // Já para os tiles normais da grade, aspect-ratio mantém os cartões proporcionais.
   const medida = stream ? medidaDe(stream) : null;
-  if (palco && medida?.w && !telaCheia) {
+  if (!palco && medida?.w && medida?.h) {
     tile.style.aspectRatio = `${medida.w} / ${medida.h}`;
   }
 
@@ -3112,11 +3115,14 @@ if (window.ResizeObserver) {
   if (gridEl) gridObserver.observe(gridEl);
 }
 
-// visualViewport cobre mudanças de tamanho do iframe da Activity que o
-// ResizeObserver do grid pode não detectar (e.g. Discord encolhendo o painel).
+// visualViewport cobre mudanças de tamanho do iframe da Activity (e.g. Discord expandindo o painel).
+// Não depende de telaCheia === true para responder ao redimensionamento do Discord.
 if (typeof visualViewport !== 'undefined') {
   visualViewport.addEventListener('resize', () => {
-    if (telaCheia && inRoom()) renderGrid();
+    if (inRoom()) {
+      applyStrip();
+      if (activeSlot !== null) renderGrid();
+    }
   });
 }
 
