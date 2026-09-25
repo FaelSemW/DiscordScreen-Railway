@@ -63,6 +63,15 @@ function comTransmissao({ assistindo = true } = {}) {
   return { room, viewer: viewer.limpar(), ws: ws.limpar(), entry };
 }
 
+it('preserva os espectadores quando a captura reinicia no mesmo socket', () => {
+  const { room, viewer, entry } = comTransmissao();
+  R.startStream(room, entry);
+  expect(viewer.__watching.has(entry.slot)).toBe(true);
+  const chunk = Buffer.from([entry.slot, 1, 0]);
+  R.pushChunk(room, entry, chunk);
+  expect(viewer.binarios()).toContain(chunk);
+});
+
 /** Um quadro cru: slot no primeiro byte, tipo no segundo. */
 function quadro(slot, tipo, tamanho = 64) {
   const buffer = Buffer.alloc(tamanho);
@@ -400,14 +409,14 @@ describe('attachBroadcaster', () => {
 });
 
 describe('startStream', () => {
-  it('anuncia a transmissão e zera quem estava assistindo', () => {
+  it('preserva quem já está assistindo ao receber um start repetido', () => {
     const { room, viewer, entry } = comTransmissao();
     expect(viewer.__watching.has(entry.slot)).toBe(true);
 
     R.startStream(room, entry);
 
-    expect(viewer.__watching.has(entry.slot)).toBe(false);
-    expect(viewer.tipos()).toContain('stream-start');
+    expect(viewer.__watching.has(entry.slot)).toBe(true);
+    expect(viewer.tipos()).not.toContain('stream-start');
   });
 });
 

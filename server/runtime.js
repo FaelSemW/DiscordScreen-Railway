@@ -10,6 +10,7 @@ import { signToken, verifyToken } from './tokens.js';
 import * as R from './rooms.js';
 import { systemSnapshot, startSampling } from './system.js';
 import { buildAdminDashboard } from './admin.js';
+import { BUILD_METADATA } from '../shared/build-metadata.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -22,6 +23,7 @@ export function createAppServer(options = {}) {
   let server = null;
   const {
     port = Number(process.env.PORT) || 3001,
+    host = process.env.HOST || '127.0.0.1',
     discordClientId = process.env.DISCORD_CLIENT_ID || null,
     discordClientSecret = process.env.DISCORD_CLIENT_SECRET || null,
     discordBotToken = process.env.DISCORD_BOT_TOKEN || null,
@@ -44,16 +46,20 @@ export function createAppServer(options = {}) {
     if (currentPublicOrigin) return currentPublicOrigin;
     const boundPort =
       (server && typeof server.address === 'function' && server.address()?.port) || port;
-    return `http://127.0.0.1:${boundPort}`;
+    return `http://${host || '127.0.0.1'}:${boundPort}`;
   };
   const getVerifiedPublicOrigin = () => {
     if (currentPublicOrigin && currentPublicOrigin.startsWith('https://')) {
       return currentPublicOrigin;
     }
-    if (nodeEnv !== 'production') {
+    if (nodeEnv !== 'production' || currentPublicOrigin) {
       return getPublicOrigin();
     }
     return null;
+  };
+  const getRedirectUri = () => {
+    const origin = getPublicOrigin();
+    return `${origin}/api/auth/discord/callback`;
   };
   const setPublicOrigin = (origin) => {
     currentPublicOrigin = origin ? String(origin).trim().replace(/[/]+$/, '') : null;
@@ -162,15 +168,19 @@ export function createAppServer(options = {}) {
     // Se temos secret configurado no servidor, usa direto
     if (discordClientId && discordClientSecret) {
       try {
+        const oauthParams = {
+          client_id: discordClientId,
+          client_secret: discordClientSecret,
+          grant_type: 'authorization_code',
+          code,
+        };
+        const redirect = req.body?.redirect_uri || getRedirectUri();
+        if (redirect) oauthParams.redirect_uri = redirect;
+
         const r = await fetch('https://discord.com/api/oauth2/token', {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({
-            client_id: discordClientId,
-            client_secret: discordClientSecret,
-            grant_type: 'authorization_code',
-            code,
-          }),
+          body: new URLSearchParams(oauthParams),
           signal: AbortSignal.timeout(8000),
         });
 
@@ -529,12 +539,11 @@ export function createAppServer(options = {}) {
   // ------------------------------------------------- login web (fora do Discord)
 
   const WEB_INSTANCE = 'web';
-  const getRedirectUri = () => `${getPublicOrigin()}/auth/callback`;
 
-  function discordAuthorizeUrl(state = null) {
+  function discordAuthorizeUrl(state = null, redirectUri = null) {
     const url = new URL('https://discord.com/oauth2/authorize');
     url.searchParams.set('client_id', discordClientId || '');
-    url.searchParams.set('redirect_uri', getRedirectUri());
+    url.searchParams.set('redirect_uri', redirectUri || getRedirectUri());
     url.searchParams.set('response_type', 'code');
     url.searchParams.set('scope', 'identify');
     if (state) url.searchParams.set('state', state);
@@ -560,16 +569,19 @@ export function createAppServer(options = {}) {
       },
       10 * 60,
     );
-    res.redirect(discordAuthorizeUrl(state).toString());
+    res.redirect(discordAuthorizeUrl(state, `${getPublicOrigin()}/auth/callback`).toString());
   });
 
-  app.get('/auth/callback', async (req, res) => {
+  app.get(['/auth/callback', '/api/auth/discord/callback'], async (req, res) => {
     const { code, state } = req.query;
     const oauthState = verifyToken(typeof state === 'string' ? state : '');
     const adminFlow = oauthState?.scope === 'oauth-state' && oauthState.target === 'admin';
     if (!code) return res.redirect(adminFlow ? '/admin?error=sem_codigo' : '/?erro=sem_codigo');
 
     try {
+      const isLegacyAuth = req.originalUrl?.includes('/auth/callback') && !req.originalUrl?.includes('/api/');
+      const effectiveRedirectUri = isLegacyAuth ? `${getPublicOrigin()}/auth/callback` : getRedirectUri();
+
       const token = await fetch('https://discord.com/api/oauth2/token', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -577,7 +589,7 @@ export function createAppServer(options = {}) {
           client_id: discordClientId || '',
           client_secret: discordClientSecret || '',
           grant_type: 'authorization_code',
-          redirect_uri: getRedirectUri(),
+          redirect_uri: effectiveRedirectUri,
           code: String(code),
         }),
       }).then((r) => r.json());
@@ -715,6 +727,11 @@ export function createAppServer(options = {}) {
 
   const clientDist = staticDirectory || path.join(__dirname, '..', 'client', 'dist');
 
+  app.get('/api/build', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(BUILD_METADATA);
+  });
+
   app.get('/api/config', (_req, res) => {
     res.setHeader('Cache-Control', 'no-store');
 
@@ -726,7 +743,11 @@ export function createAppServer(options = {}) {
       // Ainda sem build
     }
 
-    res.json({ clientId: activeDesktopClientId || discordClientId || null, asset });
+    res.json({
+      clientId: activeDesktopClientId || discordClientId || null,
+      asset,
+      build: BUILD_METADATA,
+    });
   });
 
   app.use(
@@ -787,9 +808,12 @@ export function createAppServer(options = {}) {
     const pedida = url.searchParams.get('fonte');
     const fonte = R.FONTES.has(pedida) ? pedida : 'tela';
     const controle = url.searchParams.get('modo') === 'controle';
+    // An authenticated broadcaster may explicitly continue from the desktop
+    // without an Activity viewer tab. Browser capture keeps its existing policy.
+    const background = url.searchParams.get('background') === '1';
 
     wss.handleUpgrade(req, socket, head, (ws) => {
-      wss.emit('connection', ws, req, payload, fonte, controle);
+      wss.emit('connection', ws, req, payload, fonte, controle, background);
     });
   });
 
@@ -883,7 +907,7 @@ export function createAppServer(options = {}) {
     ws.on('error', cleanup);
   }
 
-  wss.on('connection', (ws, _req, auth, fonte, controle) => {
+  wss.on('connection', (ws, _req, auth, fonte, controle, background = false) => {
     ws.__alive = true;
     ws.__missedPings = 0;
     ws.__connectedAt = Date.now();
@@ -914,7 +938,7 @@ export function createAppServer(options = {}) {
       handleBroadcaster(
         ws,
         room,
-        { id: auth.uid, name: auth.name, avatar: auth.av ?? null },
+        { id: auth.uid, name: auth.name, avatar: auth.av ?? null, background },
         fonte,
       );
     } else {
@@ -995,14 +1019,21 @@ export function createAppServer(options = {}) {
       } else if (msg.type === 'rtc' && typeof msg.peer === 'string' && msg.payload) {
         R.rtcParaViewer(room, entry, msg.peer, msg.payload);
       } else if (msg.type === 'stop') {
+        entry.intentionalStop = true;
         R.stopStream(room, entry);
+        R.detachBroadcaster(room, ws);
         console.log(`[room ${room.id}] stream parada por ${info.name}`);
       }
     });
 
-    ws.on('close', () => {
-      R.detachBroadcaster(room, ws);
-      console.log(`[room ${room.id}] broadcaster saiu: ${info.name}`);
+    ws.on('close', (code, reason) => {
+      const isAbnormalDrop = code === 1006 || (!entry?.intentionalStop && code !== 1000 && code !== 1001 && code !== 1005);
+      if (isAbnormalDrop && !entry?.intentionalStop) {
+        R.handleBroadcasterDisconnect(room, ws, code, reason);
+      } else {
+        R.detachBroadcaster(room, ws);
+      }
+      console.log(`[room ${room.id}] broadcaster saiu: ${info.name} (code=${code})`);
     });
   }
 
@@ -1089,11 +1120,11 @@ export function createAppServer(options = {}) {
 
   const heartbeat = setInterval(() => {
     for (const ws of wss.clients) {
-      // Tolera até 3 ciclos de ping sem resposta antes de terminar
+      // Tolera até 5 ciclos de ping sem resposta antes de terminar (75 segundos)
       if (ws.__alive === false) {
         ws.__missedPings = (ws.__missedPings || 0) + 1;
-        if (ws.__missedPings >= 3) {
-          console.warn('[ws heartbeat] encerrando conexao inativa apos 3 pings sem resposta');
+        if (ws.__missedPings >= 5) {
+          console.warn('[ws heartbeat] encerrando conexao inativa apos 5 pings sem resposta');
           ws.terminate();
           continue;
         }
@@ -1125,8 +1156,10 @@ export function createAppServer(options = {}) {
     wss,
     heartbeat,
     port: Number(port),
+    host: String(host),
     getPublicOrigin,
     getVerifiedPublicOrigin,
+    getRedirectUri,
     setPublicOrigin,
   };
 }
@@ -1140,7 +1173,7 @@ export async function startServer(options = {}) {
   }
 
   const instance = createAppServer(options);
-  const { server, port } = instance;
+  const { server, port, host } = instance;
 
   await new Promise((resolve, reject) => {
     const onError = (err) => {
@@ -1153,7 +1186,7 @@ export async function startServer(options = {}) {
     };
     server.once('error', onError);
     server.once('listening', onListen);
-    server.listen(port);
+    server.listen(port, host || '127.0.0.1');
   });
 
   activeRuntime = instance;

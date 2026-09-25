@@ -16,12 +16,12 @@ if (process.versions?.electron) {
 
 export class ConfigManager {
   constructor(customConfigPath = null) {
-    // Isolated directory strictly for the Railway private client
+    // Config directory for DC Screen Sharing Self-Hosted
     this.configDir = customConfigPath
       ? path.dirname(customConfigPath)
       : path.join(
-          process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
-          'DiscordScreenRailway',
+          process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'),
+          'DC Screen Sharing',
         );
     this.configFile = customConfigPath || path.join(this.configDir, 'config.json');
     this.config = this.getDefaults();
@@ -37,19 +37,26 @@ export class ConfigManager {
 
   getDefaults() {
     return {
-      schemaVersion: 1,
+      schemaVersion: 2,
       version: '1.0.0',
+      port: 3000,
+      host: '127.0.0.1',
       discordClientId: '',
       discordClientSecretEncrypted: '',
       discordBotTokenEncrypted: '',
       discordAdminId: '',
-      publicOrigin: 'https://zaprecovery.online',
+      publicOrigin: '',
       confirmedPublicOrigin: '',
+      customDomain: '',
+      cloudflareTunnelToken: '',
       firstRunCompleted: false,
       beginnerMode: true,
       theme: 'dark',
       language: 'pt-BR',
       minimizeToTray: true,
+      broadcasterPreset: 'maxima',
+      broadcasterAudioMode: 'system',
+      excludeDiscordAudio: true,
     };
   }
 
@@ -127,8 +134,10 @@ export class ConfigManager {
       this.config = this.getDefaults();
     }
 
-    // Always enforce the fixed production domain
-    this.config.publicOrigin = 'https://zaprecovery.online';
+    // Normalize publicOrigin if present
+    this.config.publicOrigin = this.config.publicOrigin
+      ? this.config.publicOrigin.trim().replace(/\/+$/, '')
+      : '';
 
     this._registerSecretsInLogger();
     return this.config;
@@ -275,8 +284,48 @@ export class ConfigManager {
     this.config.discordAdminId = (id || '').trim();
   }
 
+  getPort() {
+    return Number(this.config.port) || 3000;
+  }
+
+  setPort(port) {
+    this.config.port = Number(port) || 3000;
+  }
+
+  getHost() {
+    return this.config.host || '127.0.0.1';
+  }
+
+  setHost(host) {
+    this.config.host = (host || '127.0.0.1').trim();
+  }
+
+  getLocalUrl() {
+    return `http://${this.getHost()}:${this.getPort()}`;
+  }
+
   getPublicOrigin() {
-    return 'https://zaprecovery.online';
+    return this.config.publicOrigin || this.getLocalUrl();
+  }
+
+  setPublicOrigin(origin) {
+    this.config.publicOrigin = origin ? origin.trim().replace(/\/+$/, '') : '';
+  }
+
+  getCustomDomain() {
+    return this.config.customDomain || '';
+  }
+
+  setCustomDomain(domain) {
+    this.config.customDomain = (domain || '').trim().replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+  }
+
+  getCloudflareTunnelToken() {
+    return this._decrypt(this.config.cloudflareTunnelToken);
+  }
+
+  setCloudflareTunnelToken(token) {
+    this.config.cloudflareTunnelToken = this._encrypt((token || '').trim());
   }
 
   getConfirmedPublicOrigin() {
@@ -303,9 +352,13 @@ export class ConfigManager {
   getPublicConfig() {
     const secret = this.getClientSecret();
     const botToken = this.getBotToken();
+    const tunnelToken = this.getCloudflareTunnelToken();
     const validation = this.validateDiscordConfiguration();
     return {
       version: this.config.version,
+      port: this.getPort(),
+      host: this.getHost(),
+      localUrl: this.getLocalUrl(),
       discordClientId: this.getClientId(),
       hasClientSecret: Boolean(secret && secret.length >= 20),
       clientSecretMasked: secret ? `${secret.slice(0, 4)}••••••••••••${secret.slice(-4)}` : '',
@@ -314,11 +367,16 @@ export class ConfigManager {
       discordAdminId: this.getAdminId(),
       publicOrigin: this.getPublicOrigin(),
       confirmedPublicOrigin: this.getConfirmedPublicOrigin(),
+      customDomain: this.getCustomDomain(),
+      hasTunnelToken: Boolean(tunnelToken && tunnelToken.length > 20),
       firstRunCompleted: this.config.firstRunCompleted,
       beginnerMode: this.config.beginnerMode,
       theme: this.config.theme,
       language: this.config.language,
       minimizeToTray: this.config.minimizeToTray,
+      broadcasterPreset: this.config.broadcasterPreset || 'maxima',
+      broadcasterAudioMode: this.config.broadcasterAudioMode || 'system',
+      excludeDiscordAudio: this.config.excludeDiscordAudio ?? true,
       isConfigured: validation.valid,
       validationStatus: validation.status,
       validationMessage: validation.message,

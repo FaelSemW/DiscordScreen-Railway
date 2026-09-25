@@ -1,5 +1,6 @@
 import { iceServers, criarPeer, ajustarEnvio, suportaWebRTC, MORTO } from './rtc.js';
 import { createIntervalTracker, createValueTracker } from './pacing-metrics.js';
+import { BUILD_METADATA } from './build-metadata.js';
 import {
   QUALITY_PRESETS,
   DEFAULT_PRESET,
@@ -365,7 +366,7 @@ export function createBroadcaster(opts) {
     fonte = 'tela',
     streamPronto = null,
     deviceId = null,
-    maxReconnectAttempts = 5,
+    maxReconnectAttempts = opts.maxReconnectAttempts !== undefined ? opts.maxReconnectAttempts : Infinity,
     onStatus,
     onStats,
     onEnd,
@@ -439,12 +440,19 @@ export function createBroadcaster(opts) {
 
   let running = false;
   let mySlot = 0;
+  let audioConfig = null;
+  let lastSerializedConfig = null;
+  let fallbackAudioCtx = null;
   let wantKeyframe = true;
   let lastKeyframeAt = 0;
+  let cachedFrame = null;
   let srcW = 0;
   let srcH = 0;
   let proximaMarca = null;
   let afogado = false;
+  let transportBacklogged = false;
+  let audioExclusionActive = false;
+  let stopAudioExclusionListener = null;
 
   let capturePath = 'UNKNOWN';
   let framesRead = 0;
@@ -466,6 +474,10 @@ export function createBroadcaster(opts) {
   let droppedBeforeEncode = 0;
   let droppedPressure = 0;
   let droppedNetworkFrames = 0;
+  let droppedAdmissionPressure = 0;
+  let droppedTransportPressure = 0;
+  let droppedCaptureDuplicate = 0;
+  let audioCaptureSource = 'none';
 
   let keyframeChunksCount = 0;
   let keyframeBytesTotal = 0;
@@ -652,6 +664,13 @@ export function createBroadcaster(opts) {
       output: onEncoded,
       error: (err) => stop(`Erro no encoder: ${err.message}`),
     });
+    encoder.addEventListener?.('dequeue', () => {
+      const q = encoder.encodeQueueSize;
+      encodeQueueTracker.sample(q);
+      if (q <= 2 && !transportBacklogged) {
+        afogado = false;
+      }
+    });
     encoder.configure(config);
 
     ws.send(JSON.stringify({ type: 'start' }));
@@ -677,6 +696,25 @@ export function createBroadcaster(opts) {
       lastStatsTime = now;
 
       if (cooldownSec > 0) cooldownSec--;
+
+      // Keepalive de tela estática: se a tela não mudou e nenhum quadro foi enviado nos últimos KEYFRAME_EVERY_MS,
+      // re-envia um keyframe a partir do cachedFrame para que espectadores e a conexão nunca fiquem sem sinal.
+      const nowWall = Date.now();
+      if (
+        running &&
+        cachedFrame &&
+        encoder?.state === 'configured' &&
+        ws?.readyState === WebSocket.OPEN &&
+        nowWall - lastKeyframeAt >= KEYFRAME_EVERY_MS
+      ) {
+        try {
+          const copy = cachedFrame.clone();
+          encoder.encode(copy, { keyFrame: true });
+          copy.close();
+          lastKeyframeAt = nowWall;
+          wantKeyframe = false;
+        } catch {}
+      }
 
       const capStats = captureTracker.getStats();
       const encInStats = encoderInputTracker.getStats();
@@ -816,11 +854,19 @@ export function createBroadcaster(opts) {
           droppedNetworkFrames,
           encoderToSendDelayP95Ms: sendDelayStats.p95,
         },
+        build: BUILD_METADATA,
+        dropAccounting: {
+          captureDuplicate: droppedCaptureDuplicate,
+          admissionPressure: droppedAdmissionPressure,
+          transportPressure: droppedTransportPressure,
+          totalDroppedBeforeEncode: droppedBeforeEncode + droppedPressure,
+        },
         health: classifyHealth(),
         limiter: classifyLimiter(),
         reason: adaptiveReason,
         seconds: Math.floor((Date.now() - startedAt) / 1000),
         audio: {
+          audioCaptureSource,
           trackPresent: Boolean(currentAudioTrack || stream?.getAudioTracks?.()?.length),
           trackSampleRate: currentAudioTrack?.getSettings?.()?.sampleRate ?? null,
           encoderSampleRate: 48000,
@@ -989,12 +1035,18 @@ export function createBroadcaster(opts) {
     return null;
   }
 
+  /** A superfície escolhida entrega som sem levar o Discord junto? */
+  function somIsolado(superficie) {
+    if (superficie === 'browser') return true;
+    return superficie === 'window' && somDeJanelaConfiavel();
+  }
+
   /** A superfície escolhida entrega som suportado? */
   function somPermitido(superficie) {
     if (superficie === 'browser') return true;
     if (superficie === 'window') return somDeJanelaConfiavel();
-    if (superficie === 'monitor' || !superficie) return true;
-    return true;
+    if (superficie === 'monitor') return true;
+    return false;
   }
 
   /** Por que o som que veio foi barrado, e por onde sair disso. */
@@ -1083,33 +1135,66 @@ export function createBroadcaster(opts) {
 
   // -------------------------------------------------------------------- áudio
 
-  function resampleAudioData(audioData, targetSampleRate) {
-    const numChannels = audioData.numberOfChannels;
+  function resampleAudioData(audioData, targetSampleRate, targetChannels = 2) {
     const inFrames = audioData.numberOfFrames;
     const inRate = audioData.sampleRate;
+    const numChannels = audioData.numberOfChannels || 1;
+    const outChannels = targetChannels || numChannels;
     const outFrames = Math.max(1, Math.round((inFrames * targetSampleRate) / inRate));
 
-    const resampledData = new Float32Array(outFrames * numChannels);
-    const tempIn = new Float32Array(inFrames);
+    const isPlanar = typeof audioData.format === 'string' && audioData.format.includes('planar');
+    const buf = new Float32Array(outFrames * outChannels);
+    const tmp = new Float32Array(inFrames);
+    const ratio = inRate / targetSampleRate;
 
-    for (let c = 0; c < numChannels; c++) {
-      audioData.copyTo(tempIn, { planeIndex: c, format: 'f32-planar' });
-      for (let i = 0; i < outFrames; i++) {
-        const srcPos = (i * (inFrames - 1)) / (outFrames - 1 || 1);
-        const idx0 = Math.floor(srcPos);
-        const idx1 = Math.min(idx0 + 1, inFrames - 1);
-        const frac = srcPos - idx0;
-        resampledData[c * outFrames + i] = tempIn[idx0] * (1 - frac) + tempIn[idx1] * frac;
+    let interleaved = null;
+    if (!isPlanar && numChannels > 1) {
+      interleaved = new Float32Array(inFrames * numChannels);
+      try {
+        audioData.copyTo(interleaved, { planeIndex: 0, format: 'f32' });
+      } catch {
+        interleaved = null;
+      }
+    }
+
+    for (let c = 0; c < outChannels; c++) {
+      const srcChan = Math.min(c, numChannels - 1);
+      if (interleaved) {
+        for (let i = 0; i < inFrames; i++) {
+          tmp[i] = interleaved[i * numChannels + srcChan];
+        }
+      } else {
+        try {
+          audioData.copyTo(tmp, { planeIndex: srcChan, format: 'f32-planar' });
+        } catch {
+          try {
+            audioData.copyTo(tmp, { planeIndex: 0, format: 'f32' });
+          } catch {
+            tmp.fill(0);
+          }
+        }
+      }
+
+      if (inRate === targetSampleRate && inFrames === outFrames) {
+        buf.set(tmp, c * outFrames);
+      } else {
+        for (let i = 0; i < outFrames; i++) {
+          const srcPos = i * ratio;
+          const idx0 = Math.floor(srcPos);
+          const idx1 = Math.min(idx0 + 1, inFrames - 1);
+          const frac = srcPos - idx0;
+          buf[c * outFrames + i] = tmp[idx0] * (1 - frac) + tmp[idx1] * frac;
+        }
       }
     }
 
     return new AudioData({
       format: 'f32-planar',
       sampleRate: targetSampleRate,
+      numberOfChannels: outChannels,
       numberOfFrames: outFrames,
-      numberOfChannels: numChannels,
       timestamp: audioData.timestamp,
-      data: resampledData,
+      data: buf,
     });
   }
 
@@ -1121,11 +1206,18 @@ export function createBroadcaster(opts) {
    * se decodifica sozinho, então não existe aqui o equivalente ao keyframe.
    */
   async function pumpAudio(track) {
-    if (!window.AudioEncoder || !window.MediaStreamTrackProcessor) return;
+    const hasMSTP =
+      typeof MediaStreamTrackProcessor !== 'undefined' ||
+      (typeof window !== 'undefined' && typeof window.MediaStreamTrackProcessor !== 'undefined');
+    const hasAudioCtx =
+      typeof AudioContext !== 'undefined' ||
+      (typeof window !== 'undefined' && (typeof window.AudioContext !== 'undefined' || typeof window.webkitAudioContext !== 'undefined'));
+
+    if (!window.AudioEncoder || (!hasMSTP && !hasAudioCtx)) return;
 
     const s = track.getSettings?.() || {};
     // Opus suporta 8k, 12k, 16k, 24k, 48k. Abas de navegadores costumam operar em 44.1kHz.
-    // Padronizamos para 48kHz quando a taxa de entrada não for suportada nativamente pelo Opus.
+    // Padronizamos para 48kHz estéreo quando a taxa de entrada não for suportada nativamente pelo Opus.
     const OPUS_RATES = new Set([8000, 12000, 16000, 24000, 48000]);
     const inputSampleRate = s.sampleRate || 48_000;
     const encoderSampleRate = OPUS_RATES.has(inputSampleRate) ? inputSampleRate : 48_000;
@@ -1149,16 +1241,102 @@ export function createBroadcaster(opts) {
       return;
     }
 
+    audioConfig = { codec: 'opus', sampleRate: encoderSampleRate, numberOfChannels };
+
     // O mesmo caminho do vídeo: quem chega depois recebe isto ao pedir a tela.
     ws?.send(
       JSON.stringify({
         type: 'audio-config',
-        config: { codec: 'opus', sampleRate: encoderSampleRate, numberOfChannels },
+        config: audioConfig,
       }),
     );
 
     currentAudioTrack = track;
+
+    stopAudioExclusionListener?.();
+    stopAudioExclusionListener = null;
+
+    let useNativeExclusion = false;
+    const bridge =
+      typeof window !== 'undefined'
+        ? window.discordScreenRailway || window.electronAPI || null
+        : null;
+
+    if (bridge && typeof bridge.getAudioExclusionStatus === 'function' && typeof bridge.onAudioPcmChunk === 'function') {
+      try {
+        let exclStatus = await bridge.getAudioExclusionStatus();
+        if (exclStatus?.state === 'STARTING') {
+          const waitStart = performance.now();
+          while (exclStatus?.state === 'STARTING' && performance.now() - waitStart < 4000) {
+            await new Promise((r) => setTimeout(r, 60));
+            exclStatus = await bridge.getAudioExclusionStatus();
+          }
+        }
+
+        if (exclStatus?.state === 'CAPTURING' || exclStatus?.stats?.isExcluding) {
+          useNativeExclusion = true;
+          audioExclusionActive = true;
+          audioCaptureSource = 'wasapi-filtered-helper';
+          console.log('[broadcaster] Exclusão nativa de áudio do Discord ATIVA. Silenciando loopback do navegador.');
+        } else {
+          audioCaptureSource = track ? 'electron-full-loopback' : 'none';
+        }
+      } catch (err) {
+        console.warn('[broadcaster] Erro ao checar status de exclusão de áudio:', err.message);
+        audioCaptureSource = 'electron-full-loopback';
+      }
+    } else {
+      const surface = track?.getSettings?.()?.displaySurface;
+      if (surface === 'window') audioCaptureSource = 'window-track';
+      else if (surface === 'browser') audioCaptureSource = 'tab-track';
+      else audioCaptureSource = track ? 'browser-track' : 'none';
+    }
+
+    if (useNativeExclusion) {
+      if (track) {
+        track.enabled = false;
+        try { track.stop(); } catch {}
+      }
+      let pcmTimestampUs = Math.round(performance.now() * 1000);
+
+      stopAudioExclusionListener = bridge.onAudioPcmChunk((chunk) => {
+        if (!running || !audioEncoder || audioEncoder.state !== 'configured') return;
+        try {
+          const rawBytes = chunk?.byteLength ?? chunk?.length ?? 0;
+          if (!rawBytes) return;
+          const frames = Math.floor(rawBytes / 4);
+          let u8;
+          if (chunk instanceof Uint8Array) {
+            u8 = chunk;
+          } else if (chunk?.buffer instanceof ArrayBuffer) {
+            u8 = new Uint8Array(chunk.buffer, chunk.byteOffset || 0, rawBytes);
+          } else {
+            u8 = new Uint8Array(chunk);
+          }
+          const nowUs = Math.round(performance.now() * 1000);
+          if (Math.abs(nowUs - pcmTimestampUs) > 150_000) {
+            pcmTimestampUs = nowUs;
+          }
+          const audioData = new AudioData({
+            format: 's16',
+            sampleRate: 48000,
+            numberOfChannels: 2,
+            numberOfFrames: frames,
+            timestamp: pcmTimestampUs,
+            data: u8,
+          });
+          pcmTimestampUs += Math.round((frames / 48000) * 1_000_000);
+          audioEncoder.encode(audioData);
+          audioData.close();
+        } catch (err) {
+          console.warn('[audio exclusion encode]', err.message);
+        }
+      });
+      return;
+    }
+
     let audioSamplesCount = 0;
+
     const deadAudioTimeout = setTimeout(() => {
       if (running && audioSamplesCount === 0) {
         console.warn('[audio] Faixa de som ativa, porém sem amostras entregues pelo navegador após 3s.');
@@ -1166,14 +1344,95 @@ export function createBroadcaster(opts) {
       }
     }, 3000);
 
-    audioReader = new MediaStreamTrackProcessor({ track }).readable.getReader();
+    const MSTProcessor =
+      typeof MediaStreamTrackProcessor !== 'undefined'
+        ? MediaStreamTrackProcessor
+        : (typeof window !== 'undefined' ? window.MediaStreamTrackProcessor : undefined);
+
+    let audioReader = null;
+    try {
+      if (MSTProcessor) {
+        audioReader = new MSTProcessor({ track }).readable.getReader();
+      }
+    } catch (mstErr) {
+      console.warn('[broadcaster] MSTProcessor falhou, tentando AudioContext:', mstErr?.message);
+      audioReader = null;
+    }
+
+    if (!audioReader) {
+      try {
+        const AudioCtx =
+          typeof window !== 'undefined'
+            ? (window.AudioContext || window.webkitAudioContext)
+            : (typeof AudioContext !== 'undefined' ? AudioContext : null);
+        if (AudioCtx) {
+          fallbackAudioCtx = new AudioCtx({ sampleRate: encoderSampleRate });
+          const sourceNode = fallbackAudioCtx.createMediaStreamSource(new MediaStream([track]));
+          const scriptNode = fallbackAudioCtx.createScriptProcessor(2048, numberOfChannels, numberOfChannels);
+          let pcmTimestampUs = Math.round(performance.now() * 1000);
+
+          scriptNode.onaudioprocess = (e) => {
+            if (!running || !audioEncoder || audioEncoder.state !== 'configured') return;
+            try {
+              audioSamplesCount++;
+              const inBuf = e.inputBuffer;
+              const frames = inBuf.length;
+              const chs = inBuf.numberOfChannels;
+              const buf = new Float32Array(frames * numberOfChannels);
+              const left = inBuf.getChannelData(0);
+              const right = chs > 1 ? inBuf.getChannelData(1) : left;
+              buf.set(left, 0);
+              buf.set(right, frames);
+
+              const nowUs = Math.round(performance.now() * 1000);
+              if (Math.abs(nowUs - pcmTimestampUs) > 150_000) pcmTimestampUs = nowUs;
+
+              const audioData = new AudioData({
+                format: 'f32-planar',
+                sampleRate: encoderSampleRate,
+                numberOfChannels,
+                numberOfFrames: frames,
+                timestamp: pcmTimestampUs,
+                data: buf,
+              });
+              pcmTimestampUs += Math.round((frames / encoderSampleRate) * 1_000_000);
+              audioEncoder.encode(audioData);
+              audioData.close();
+            } catch (err) {
+              console.warn('[broadcaster webaudio fallback encode]', err?.message);
+            }
+          };
+
+          sourceNode.connect(scriptNode);
+          scriptNode.connect(fallbackAudioCtx.destination);
+          return;
+        }
+      } catch (fbErr) {
+        console.warn('[broadcaster webaudio fallback failed]', fbErr?.message);
+      }
+      return;
+    }
+
     while (running) {
       let dados;
       try {
         const { done, value } = await audioReader.read();
-        if (done) break;
+        if (done) {
+          if (running && track.readyState === 'live') {
+            console.warn('[audio] reader sinalizou done com a faixa ainda ativa, reconectando leitor...');
+            audioReader = new MSTProcessor({ track }).readable.getReader();
+            continue;
+          }
+          break;
+        }
         dados = value;
-      } catch {
+      } catch (err) {
+        if (running && track.readyState === 'live') {
+          console.warn('[audio] erro na leitura do áudio, tentando reconectar...', err?.message);
+          await new Promise((r) => setTimeout(r, 80));
+          audioReader = new MSTProcessor({ track }).readable.getReader();
+          continue;
+        }
         break;
       }
 
@@ -1181,18 +1440,21 @@ export function createBroadcaster(opts) {
 
       if (audioEncoder?.state === 'configured') {
         try {
-          if (dados.sampleRate === encoderSampleRate) {
-            audioEncoder.encode(dados);
-            dados.close();
-          } else {
-            const resampled = resampleAudioData(dados, encoderSampleRate);
-            dados.close();
-            audioEncoder.encode(resampled);
-            resampled.close();
+          const precisaAjuste =
+            dados.sampleRate !== encoderSampleRate ||
+            dados.numberOfChannels !== numberOfChannels ||
+            dados.format !== 'f32-planar';
+          const toEncode = precisaAjuste
+            ? resampleAudioData(dados, encoderSampleRate, numberOfChannels)
+            : dados;
+          audioEncoder.encode(toEncode);
+          if (toEncode !== dados) {
+            toEncode.close();
           }
+          dados.close();
         } catch (err) {
           console.warn('[audio encode]', err.message);
-          dados.close();
+          try { dados.close(); } catch {}
         }
       } else {
         dados.close();
@@ -1347,14 +1609,35 @@ export function createBroadcaster(opts) {
     const currentQueue = encoder.encodeQueueSize;
     encodeQueueTracker.sample(currentQueue);
 
-    // Backpressure com histerese: entra em apuros com a fila acima de 2 e só sai quando ela desce a 1
-    if (currentQueue > (afogado ? 1 : 2)) {
-      afogado = true;
+    const currentBitrate = config?.bitrate || 3_000_000;
+    const wsBufferedBytes = ws?.bufferedAmount || 0;
+    const wsBufferedMs = (wsBufferedBytes * 8 / currentBitrate) * 1000;
+
+    // Backpressure adaptativo para 60 FPS estável (histerese 2/1)
+    const isQueueOverloaded = currentQueue > (afogado ? 1 : 2);
+    const isWsOverloaded = wsBufferedMs > (transportBacklogged ? 100 : 250);
+
+    if (isQueueOverloaded || isWsOverloaded) {
+      if (isQueueOverloaded) {
+        afogado = true;
+        droppedAdmissionPressure++;
+      }
+      if (isWsOverloaded) {
+        transportBacklogged = true;
+        droppedTransportPressure++;
+      }
       droppedPressure++;
       frame.close();
       return true;
     }
-    afogado = false;
+
+    if (transportBacklogged && wsBufferedMs <= 100 && currentQueue <= 2) {
+      transportBacklogged = false;
+      wantKeyframe = true; // Recuperação limpa de live-edge
+    }
+    if (afogado && currentQueue <= 1) {
+      afogado = false;
+    }
 
     // Ritmo de quadros (Frame Pacing):
     const targetIntervalMs = 1000 / fps;
@@ -1378,8 +1661,9 @@ export function createBroadcaster(opts) {
     } else {
       if (ultimoTsMs === null || tsMs < ultimoTsMs - 1000 || tsMs > ultimoTsMs + 2000) {
         ultimoTsMs = tsMs;
-      } else if (tsMs <= ultimoTsMs) {
+      } else if (tsMs <= ultimoTsMs && !wantKeyframe && (Date.now() - lastKeyframeAt <= KEYFRAME_EVERY_MS)) {
         droppedBeforeEncode++;
+        droppedCaptureDuplicate++;
         frame.close();
         return true;
       }
@@ -1411,6 +1695,15 @@ export function createBroadcaster(opts) {
       }
     } catch (err) {
       console.error('[encode]', err);
+    }
+
+    if (cachedFrame) {
+      try { cachedFrame.close(); } catch {}
+    }
+    try {
+      cachedFrame = out.clone();
+    } catch {
+      cachedFrame = null;
     }
 
     out.close();
@@ -1486,7 +1779,8 @@ export function createBroadcaster(opts) {
     }
 
     if (metadata?.decoderConfig) {
-      ws.send(JSON.stringify({ type: 'config', config: serializeConfig(metadata.decoderConfig) }));
+      lastSerializedConfig = serializeConfig(metadata.decoderConfig);
+      ws.send(JSON.stringify({ type: 'config', config: lastSerializedConfig }));
       configEnviada = true;
     }
 
@@ -1500,15 +1794,11 @@ export function createBroadcaster(opts) {
       data,
     );
 
-    if (ws.bufferedAmount > 4 * 1024 * 1024) {
-      droppedNetworkFrames++;
-    } else {
-      const sendStart = performance.now();
-      ws.send(buf);
-      encoderToSendDelayTracker.sample(performance.now() - sendStart);
-      framesSent++;
-      totalBytesSent += buf.byteLength;
-    }
+    const sendStart = performance.now();
+    ws.send(buf);
+    encoderToSendDelayTracker.sample(performance.now() - sendStart);
+    framesSent++;
+    totalBytesSent += buf.byteLength;
   }
 
   /**
@@ -1555,15 +1845,23 @@ export function createBroadcaster(opts) {
       stop('Conexão com o servidor caiu.');
       return;
     }
+    const isTrackLive = stream?.getVideoTracks()[0]?.readyState === 'live';
+    if (!isTrackLive && reconnectAttempts > 0) {
+      stop('O compartilhamento de tela foi encerrado pelo navegador.');
+      return;
+    }
     if (reconnectAttempts >= maxReconnectAttempts) {
       stop('Conexão com o servidor caiu após várias tentativas.');
       return;
     }
     isReconnecting = true;
     reconnectAttempts++;
-    const delay = Math.min(1000 * Math.pow(2, reconnectAttempts - 1), 8000);
-    console.log(`[broadcaster ws] tentativa de reconexão ${reconnectAttempts}/${maxReconnectAttempts} em ${delay}ms...`);
-    onAviso?.(`Reconectando ao servidor (${reconnectAttempts}/${maxReconnectAttempts})…`);
+    const delay = Math.min(1000 * Math.pow(1.5, Math.min(reconnectAttempts - 1, 6)), 8000);
+    const attemptsStr = Number.isFinite(maxReconnectAttempts)
+      ? `${reconnectAttempts}/${maxReconnectAttempts}`
+      : `${reconnectAttempts}`;
+    console.log(`[broadcaster ws] tentativa de reconexão ${attemptsStr} em ${delay}ms...`);
+    onAviso?.(`Reconectando ao servidor (${attemptsStr})…`);
 
     clearTimeout(reconnectTimeout);
     reconnectTimeout = setTimeout(async () => {
@@ -1572,12 +1870,29 @@ export function createBroadcaster(opts) {
         await connect();
         if (running && ws?.readyState === WebSocket.OPEN) {
           ws.send(JSON.stringify({ type: 'start' }));
-          if (config) ws.send(JSON.stringify({ type: 'config', config }));
-          if (audioConfig) ws.send(JSON.stringify({ type: 'audio-config', config: audioConfig }));
+          if (lastSerializedConfig) {
+            ws.send(JSON.stringify({ type: 'config', config: lastSerializedConfig }));
+          } else if (config) {
+            ws.send(JSON.stringify({ type: 'config', config }));
+          }
+          if (audioConfig) {
+            ws.send(JSON.stringify({ type: 'audio-config', config: audioConfig }));
+          }
           wantKeyframe = true;
+          if (cachedFrame && encoder?.state === 'configured') {
+            try {
+              const nowWall = Date.now();
+              const copy = cachedFrame.clone();
+              encoder.encode(copy, { keyFrame: true });
+              copy.close();
+              lastKeyframeAt = nowWall;
+              wantKeyframe = false;
+            } catch {}
+          }
           onAviso?.('Conexão restabelecida com o servidor.');
         }
-      } catch {
+      } catch (err) {
+        console.warn('[broadcaster ws reconnect error]', err?.message);
         isReconnecting = false;
         scheduleWsReconnect();
       }
@@ -1587,6 +1902,20 @@ export function createBroadcaster(opts) {
 
   function connect() {
     return new Promise((resolve, reject) => {
+      let settled = false;
+      const doReject = (err) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        reject(err);
+      };
+      const doResolve = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        resolve();
+      };
+
       try {
         if (ws && ws.readyState === WebSocket.OPEN) ws.close();
       } catch {
@@ -1597,13 +1926,12 @@ export function createBroadcaster(opts) {
       ws.binaryType = 'arraybuffer';
 
       const timeout = setTimeout(() => {
-        ws.close();
-        reject(new Error('Não foi possível falar com o servidor (timeout).'));
+        try { ws.close(); } catch {}
+        doReject(new Error('Não foi possível falar com o servidor (timeout).'));
       }, 10_000);
       timeout.unref?.();
 
       ws.addEventListener('open', () => {
-        clearTimeout(timeout);
         reconnectAttempts = 0;
         isReconnecting = false;
 
@@ -1612,10 +1940,10 @@ export function createBroadcaster(opts) {
           if (ws?.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: 'ping', timestamp: Date.now() }));
           }
-        }, 20_000);
+        }, 8_000);
         wsPingTimer.unref?.();
 
-        resolve();
+        doResolve();
       });
 
       ws.addEventListener('message', (e) => {
@@ -1636,7 +1964,19 @@ export function createBroadcaster(opts) {
         } else if (msg.type === 'slot') mySlot = msg.slot;
         else if (msg.type === 'state') viewers = msg.viewers;
         // Alguém entrou na sala e precisa de um ponto de partida.
-        else if (msg.type === 'need-keyframe') wantKeyframe = true;
+        else if (msg.type === 'need-keyframe') {
+          wantKeyframe = true;
+          if (cachedFrame && encoder?.state === 'configured') {
+            try {
+              const nowWall = Date.now();
+              const copy = cachedFrame.clone();
+              encoder.encode(copy, { keyFrame: true });
+              copy.close();
+              lastKeyframeAt = nowWall;
+              wantKeyframe = false;
+            } catch {}
+          }
+        }
         else if (msg.type === 'rtc-want') abrirPeer(msg.peer);
         else if (msg.type === 'rtc') receberRtc(msg.peer, msg.payload);
         else if (msg.type === 'rtc-bye') fecharPeer(msg.peer);
@@ -1648,21 +1988,24 @@ export function createBroadcaster(opts) {
         else if (msg.type === 'error') {
           if (running) stop(msg.message);
           else {
-            clearTimeout(timeout);
-            reject(new Error(msg.message));
+            doReject(new Error(msg.message));
           }
         }
       });
 
       ws.addEventListener('error', () => {
-        clearTimeout(timeout);
-        if (!running) reject(new Error('Falha ao conectar no servidor.'));
+        if (!settled) {
+          doReject(new Error('Falha ao conectar no servidor.'));
+        }
       });
 
       ws.addEventListener('close', () => {
-        clearTimeout(timeout);
         clearInterval(wsPingTimer);
         wsPingTimer = null;
+        if (!settled) {
+          doReject(new Error('Conexão fechada antes de abrir.'));
+          return;
+        }
         if (running && !isReconnecting) scheduleWsReconnect();
       });
     });
@@ -1704,6 +2047,9 @@ export function createBroadcaster(opts) {
       peers.set(peerId, pc);
 
       for (const track of stream.getTracks()) pc.addTrack(track, stream);
+      if (currentAudioTrack && currentAudioTrack.readyState === 'live' && !stream.getTracks().includes(currentAudioTrack)) {
+        try { pc.addTrack(currentAudioTrack, stream); } catch {}
+      }
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -1910,6 +2256,8 @@ export function createBroadcaster(opts) {
     stream = null;
     video?.remove();
     video = null;
+    try { fallbackAudioCtx?.close(); } catch {}
+    fallbackAudioCtx = null;
   }
 
   function stop(reason) {
@@ -1930,6 +2278,11 @@ export function createBroadcaster(opts) {
     audioReader?.cancel().catch(() => {});
     audioReader = null;
 
+    stopAudioExclusionListener?.();
+    stopAudioExclusionListener = null;
+    audioExclusionActive = false;
+    transportBacklogged = false;
+
     for (const e of [encoder, audioEncoder]) {
       if (e?.state === 'configured') {
         try {
@@ -1941,6 +2294,12 @@ export function createBroadcaster(opts) {
     }
     encoder = null;
     audioEncoder = null;
+
+    if (cachedFrame) {
+      try { cachedFrame.close(); } catch {}
+      cachedFrame = null;
+    }
+    lastSerializedConfig = null;
 
     if (ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: 'stop' }));

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Discord Screen Railway</title>
+  <title>DC Screen Sharing — Self-Hosted</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -11,15 +11,16 @@
     <!-- Header -->
     <header class="app-header">
       <div class="brand">
-        <div class="brand-logo">📺</div>
+        <div class="brand-logo">📡</div>
         <div>
-          <h1>Discord Screen Railway</h1>
+          <h1>DC Screen Sharing</h1>
         </div>
-        <span class="brand-badge" id="app-version">v1.0.0 (Build 2026.08.22.2)</span>
+        <span class="brand-badge" id="app-version">v1.0.0 (Self-Hosted)</span>
       </div>
       <div class="header-actions">
-        <button id="btn-header-home" class="btn btn-sm btn-outline">🏠 Início</button>
-        <button id="btn-header-wizard" class="btn btn-sm btn-outline">🪄 Assistente</button>
+        <button id="btn-header-home" class="btn btn-sm btn-primary">🏠 Painel</button>
+        <button id="btn-header-config" class="btn btn-sm btn-outline">⚙️ Configurações</button>
+        <button id="btn-header-diagnostics" class="btn btn-sm btn-outline">📊 Diagnósticos</button>
         <button id="btn-header-logs" class="btn btn-sm btn-outline">📋 Logs</button>
       </div>
     </header>
@@ -29,139 +30,192 @@
       
       <!-- ==================== VIEW: DASHBOARD ==================== -->
       <section id="view-dashboard" class="dashboard-container">
-        <!-- Status Grid -->
+        <!-- Status Grid (4 items) -->
         <div class="status-grid">
           <div class="status-card">
-            <div class="title">Servidor Railway</div>
-            <div class="value" id="status-server-url">zaprecovery.online</div>
-            <div class="status-badge connected" id="badge-server-status">
+            <div class="title">Servidor Local</div>
+            <div class="value" id="status-server-url">127.0.0.1:3000</div>
+            <div class="status-badge connecting" id="badge-server-status">
               <span class="status-dot"></span>
-              <span id="text-server-status">Conectado</span>
+              <span id="text-server-status">Iniciando...</span>
             </div>
           </div>
 
           <div class="status-card">
-            <div class="title">Aplicação Discord</div>
-            <div class="value" id="status-client-id">Configurada</div>
-            <div class="status-badge connected" id="badge-discord-status">
+            <div class="title">Internet / Cloudflare</div>
+            <div class="value" id="status-cf-host">trycloudflare.com</div>
+            <div class="status-badge connecting" id="badge-cf-status">
               <span class="status-dot"></span>
-              <span id="text-discord-status">Pronta</span>
+              <span id="text-cf-status">Conectando...</span>
             </div>
           </div>
 
           <div class="status-card">
-            <div class="title">Transmissão</div>
-            <div class="value" id="status-stream">Disponível</div>
-            <div class="status-badge connected" id="badge-stream-status">
+            <div class="title">Broadcaster Nativo</div>
+            <div class="value" id="status-broadcaster-format">1080p60 · HW</div>
+            <div class="status-badge connected" id="badge-broadcaster-status">
               <span class="status-dot"></span>
-              <span id="text-stream-status">Pronta</span>
+              <span id="text-broadcaster-status">Pronto</span>
             </div>
           </div>
+
+          <div class="status-card">
+            <div class="title">Áudio do Sistema</div>
+            <div class="value" id="status-audio-engine">Exclusão Discord</div>
+            <div class="status-badge connected" id="badge-audio-status">
+              <span class="status-dot"></span>
+              <span id="text-audio-status">Ativa</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- URLs & Endpoints Cards -->
+        <div class="url-box">
+          <div class="url-box-header">
+            <span class="url-box-title">🌐 Public URL & Viewer (Acesso Web / Mobile)</span>
+            <span id="label-tunnel-status" style="font-size:11px; color:#23a55a; font-weight:600;">● Online</span>
+          </div>
+          <div class="url-input-group">
+            <input type="text" id="input-public-url" readonly placeholder="Aguardando estabelecimento do Cloudflare Tunnel..." />
+            <button class="btn btn-outline" id="btn-copy-public-url">📋 Copiar URL</button>
+            <button class="btn btn-primary" id="btn-open-viewer">🌐 Abrir Viewer</button>
+          </div>
+          <div class="url-hint">Qualquer pessoa pode acessar esta URL no navegador ou no celular para assistir à transmissão diretamente sem necessidade de login.</div>
+        </div>
+
+        <div class="url-box">
+          <div class="url-box-header">
+            <span class="url-box-title">💬 Discord OAuth & Activity Callback</span>
+            <button class="btn btn-sm btn-outline" id="btn-open-discord-dev">🔗 Abrir Discord Developers</button>
+          </div>
+          <div class="url-input-group">
+            <input type="text" id="input-discord-callback" readonly placeholder="https://xxxx.trycloudflare.com/api/auth/discord/callback" />
+            <button class="btn btn-outline" id="btn-copy-callback">📋 Copiar Callback</button>
+          </div>
+          <div class="url-hint">Adicione esta URL às <strong>Redirect URIs</strong> da sua aplicação no Discord Developer Portal (Aba: OAuth2 ➔ General).</div>
         </div>
 
         <!-- Hero Action Card -->
         <div class="action-hero">
-          <h2>Compartilhar Tela com Áudio no Discord</h2>
-          <p>Sua infraestrutura central no Railway está online. Clique abaixo para iniciar a transmissão ou abrir a chamada no Discord.</p>
+          <h2>Transmissão Nativa de Tela (1080p60)</h2>
+          <p>O computador atual está atuando como anfitrião. Seu backend local e o Cloudflare Tunnel estão disponíveis para distribuição de alta velocidade.</p>
           
-          <div style="display: flex; gap: 14px; margin-bottom: 8px;">
-            <button class="btn btn-primary btn-lg" id="btn-start-transmission">
-              📺 Iniciar Transmissão
+          <div style="display: flex; gap: 14px; margin-bottom: 12px; width: 100%; max-width: 600px;">
+            <button class="btn btn-primary btn-lg" id="btn-open-native-broadcaster" style="background: linear-gradient(135deg,#5865f2,#7c8af2); flex: 2;">
+              📡 Abrir Native Broadcaster
             </button>
-            <button class="btn btn-outline btn-lg" id="btn-open-discord">
+            <button class="btn btn-outline btn-lg" id="btn-open-discord" style="flex: 1;">
               💬 Abrir Discord
             </button>
           </div>
-        </div>
 
-        <!-- Quick Actions & Reset -->
-        <div class="card">
-          <h3 style="font-size: 15px; margin-bottom: 14px;">Gerenciamento da Aplicação</h3>
-          <div class="quick-actions" style="justify-content: flex-start;">
-            <button class="btn btn-outline" id="btn-change-app">
-              🔄 Alterar Aplicação do Discord
+          <div style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;">
+            <button class="btn btn-outline btn-sm" id="btn-restart-tunnel">
+              🔄 Reiniciar Túnel
             </button>
-            <button class="btn btn-outline" id="btn-copy-target">
-              📋 Copiar Domínio (zaprecovery.online)
+            <button class="btn btn-outline btn-sm" id="btn-toggle-server">
+              ⏹ Parar Servidor Local
             </button>
-            <button class="btn btn-danger" id="btn-reset-config">
-              ⚠️ Redefinir Configurações
+            <button class="btn btn-outline btn-sm" id="btn-open-logs-folder">
+              📂 Abrir Pasta de Logs
             </button>
           </div>
         </div>
       </section>
 
-      <!-- ==================== VIEW: WIZARD ==================== -->
-      <section id="view-wizard" class="wizard-container hidden">
+      <!-- ==================== VIEW: CONFIG ==================== -->
+      <section id="view-config" class="config-container hidden">
         <div class="card">
-          <!-- Step 1: Welcome -->
-          <div class="wizard-step" id="wizard-step-1">
-            <h2 style="font-size: 20px; margin-bottom: 10px;">Bem-vindo ao Discord Screen Railway!</h2>
-            <p style="color: var(--text-muted); font-size: 14px; margin-bottom: 20px;">
-              Esta versão utiliza a infraestrutura central hospedada no Railway com o domínio permanente <strong>zaprecovery.online</strong>.
-              Suas credenciais do Discord serão salvas de forma 100% segura no seu próprio computador e nunca serão enviadas ao servidor.
-            </p>
-            <div style="display: flex; justify-content: flex-end;">
-              <button class="btn btn-primary btn-lg" id="btn-wizard-step1-next">Continuar ➔</button>
-            </div>
+          <h2 style="font-size: 18px; margin-bottom: 16px;">Configurações do Servidor e Discord</h2>
+          
+          <div class="form-group">
+            <label for="cfg-port">Porta Local do Servidor</label>
+            <input type="number" id="cfg-port" value="3000" min="1024" max="65535" />
+            <div class="hint">Porta HTTP/WebSocket local (padrão: 3000). Se estiver em uso, uma porta livre será selecionada automaticamente.</div>
           </div>
 
-          <!-- Step 2: Credentials -->
-          <div class="wizard-step hidden" id="wizard-step-2">
-            <h2 style="font-size: 20px; margin-bottom: 10px;">Credenciais da Aplicação Discord</h2>
-            <p style="color: var(--text-muted); font-size: 14px; margin-bottom: 20px;">
-              Insira o <strong>Client ID</strong> e o <strong>Client Secret</strong> da sua aplicação no Discord Developer Portal.
-            </p>
-
-            <div class="form-group">
-              <label for="input-client-id">Client ID do Discord</label>
-              <input type="text" id="input-client-id" placeholder="Ex: 123456789012345678" />
-              <div class="hint">Encontrado na aba "OAuth2" ou "General Information" no Discord Developer Portal.</div>
-            </div>
-
-            <div class="form-group">
-              <label for="input-client-secret">Client Secret do Discord</label>
-              <input type="password" id="input-client-secret" placeholder="••••••••••••••••••••••••••••••••" />
-              <div class="hint">Armazenado exclusivamente no Windows DPAPI local. Nunca é enviado ao Railway.</div>
-            </div>
-
-            <div id="credentials-error" class="alert alert-danger hidden"></div>
-
-            <div style="display: flex; justify-content: space-between; margin-top: 20px;">
-              <button class="btn btn-outline" id="btn-wizard-step2-back">⬅ Voltar</button>
-              <button class="btn btn-primary" id="btn-wizard-step2-next">Avançar ➔</button>
-            </div>
+          <div class="form-group" style="margin-top: 18px;">
+            <label for="cfg-client-id">Discord Client ID (Opcional para Modo Web)</label>
+            <input type="text" id="cfg-client-id" placeholder="Ex: 123456789012345678" />
+            <div class="hint">ID da aplicação cadastrada no Discord Developer Portal. Necessário apenas para modo Discord Activity.</div>
           </div>
 
-          <!-- Step 3: Discord Developer Portal Setup -->
-          <div class="wizard-step hidden" id="wizard-step-3">
-            <h2 style="font-size: 20px; margin-bottom: 10px;">Configuração no Discord Developer Portal</h2>
-            <p style="color: var(--text-muted); font-size: 14px; margin-bottom: 16px;">
-              Acesse a sua aplicação no Discord Developer Portal e configure os seguintes endereços permanentes:
-            </p>
+          <div class="form-group">
+            <label for="cfg-client-secret">Discord Client Secret</label>
+            <input type="password" id="cfg-client-secret" placeholder="••••••••••••••••••••••••••••••••" />
+            <div class="hint">Armazenado com segurança via criptografia do Windows DPAPI. Nunca é enviado à internet.</div>
+          </div>
 
-            <div class="portal-box">
-              <div style="font-size: 13px; font-weight: 700; color: #fff;">1. URL Mapping (Aba: Activities ➔ URL Mappings)</div>
-              <div class="portal-field">
-                <span>Target: <code>zaprecovery.online</code></span>
-                <button class="btn btn-sm btn-outline" id="btn-copy-portal-target">Copiar</button>
-              </div>
+          <div class="form-group" style="margin-top: 18px;">
+            <label for="cfg-custom-domain">Domínio Personalizado Cloudflare (Opcional)</label>
+            <input type="text" id="cfg-custom-domain" placeholder="Ex: zaprecovery.online" />
+            <div class="hint">Deixe em branco para usar automaticamente o domínio gratuito *.trycloudflare.com.</div>
+          </div>
 
-              <div style="font-size: 13px; font-weight: 700; color: #fff; margin-top: 14px;">2. Redirect URI (Aba: OAuth2 ➔ General)</div>
-              <div class="portal-field">
-                <span>Redirect: <code>https://zaprecovery.online/auth/callback</code></span>
-                <button class="btn btn-sm btn-outline" id="btn-copy-portal-redirect">Copiar</button>
-              </div>
+          <div class="form-group">
+            <label for="cfg-tunnel-token">Cloudflare Tunnel Token (Opcional para Named Tunnel)</label>
+            <input type="password" id="cfg-tunnel-token" placeholder="Token do túnel no Cloudflare Zero Trust (opcional)" />
+            <div class="hint">Se você possui um túnel fixo próprio no Cloudflare Zero Trust, cole o token aqui.</div>
+          </div>
+
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 24px;">
+            <button class="btn btn-danger" id="btn-reset-all-config">⚠️ Redefinir Configurações</button>
+            <button class="btn btn-primary" id="btn-save-config">💾 Salvar Configurações</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- ==================== VIEW: DIAGNOSTICS ==================== -->
+      <section id="view-diagnostics" class="diagnostics-container hidden">
+        <div class="card">
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px;">
+            <h2 style="font-size: 18px;">Diagnósticos em Tempo Real do Sistema</h2>
+            <button class="btn btn-sm btn-outline" id="btn-refresh-diagnostics">↺ Atualizar</button>
+          </div>
+
+          <div class="diag-grid">
+            <div class="diag-card">
+              <h3>🖥 Infraestrutura Local</h3>
+              <table class="diag-table">
+                <tr><td class="label">Servidor Local</td><td class="val" id="diag-srv-status">READY</td></tr>
+                <tr><td class="label">Endereço de Loopback</td><td class="val" id="diag-srv-addr">127.0.0.1:3000</td></tr>
+                <tr><td class="label">Cloudflare Tunnel</td><td class="val" id="diag-cf-status">CONNECTED</td></tr>
+                <tr><td class="label">URL Pública Ativa</td><td class="val" id="diag-cf-url" style="font-size:11px;">—</td></tr>
+                <tr><td class="label">WebSocket Endpoint</td><td class="val" id="diag-ws-status">READY</td></tr>
+              </table>
             </div>
 
-            <label class="checkbox-label">
-              <input type="checkbox" id="check-portal-confirmed" />
-              <span>Já configurei e salvei essas configurações no Discord Developer Portal</span>
-            </label>
+            <div class="diag-card">
+              <h3>📡 Pipeline de Transmissão</h3>
+              <table class="diag-table">
+                <tr><td class="label">Broadcaster Nativo</td><td class="val" id="diag-bc-status">PRONTO</td></tr>
+                <tr><td class="label">FPS de Captura (Raw)</td><td class="val" id="diag-fps-cap">—</td></tr>
+                <tr><td class="label">FPS Encoder (WebCodecs)</td><td class="val" id="diag-fps-enc">—</td></tr>
+                <tr><td class="label">FPS Enviado (WS)</td><td class="val" id="diag-fps-sent">—</td></tr>
+                <tr><td class="label">Aceleração por Hardware</td><td class="val" id="diag-hw-accel">Sim (GPU)</td></tr>
+                <tr><td class="label">Resolução / Preset</td><td class="val" id="diag-resolution">1920x1080 (Máxima)</td></tr>
+              </table>
+            </div>
 
-            <div style="display: flex; justify-content: space-between; margin-top: 24px;">
-              <button class="btn btn-outline" id="btn-wizard-step3-back">⬅ Voltar</button>
-              <button class="btn btn-primary" id="btn-wizard-step3-finish" disabled>Concluir e Conectar ➔</button>
+            <div class="diag-card">
+              <h3>🎵 Sistema de Áudio</h3>
+              <table class="diag-table">
+                <tr><td class="label">Motor de Exclusão</td><td class="val" id="diag-audio-engine">DCSS.AudioCapture.exe</td></tr>
+                <tr><td class="label">Status WASAPI</td><td class="val" id="diag-audio-status">READY</td></tr>
+                <tr><td class="label">Exclusão do Discord</td><td class="val" id="diag-discord-excl">ATIVADA (Sem eco)</td></tr>
+                <tr><td class="label">Taxa de Amostragem</td><td class="val">48 kHz Stereo 16-bit</td></tr>
+                <tr><td class="label">A/V Drift Estimado</td><td class="val" id="diag-av-drift">&lt; 15 ms</td></tr>
+              </table>
+            </div>
+
+            <div class="diag-card">
+              <h3>⚙️ Discord & Segurança</h3>
+              <table class="diag-table">
+                <tr><td class="label">Client ID Discord</td><td class="val" id="diag-client-id">—</td></tr>
+                <tr><td class="label">Client Secret (DPAPI)</td><td class="val" id="diag-client-secret">—</td></tr>
+                <tr><td class="label">Redirect URI Validada</td><td class="val" id="diag-redirect-uri" style="font-size:11px;">—</td></tr>
+                <tr><td class="label">Exposição Externa Direta</td><td class="val" style="color:#23a55a;">Não (Restrito a 127.0.0.1)</td></tr>
+              </table>
             </div>
           </div>
         </div>
@@ -172,9 +226,13 @@
         <div class="card">
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
             <h2 style="font-size: 16px;">Logs da Aplicação</h2>
-            <button class="btn btn-sm btn-outline" id="btn-copy-logs">📋 Copiar Logs</button>
+            <div style="display: flex; gap: 8px;">
+              <button class="btn btn-sm btn-outline" id="btn-copy-logs">📋 Copiar Logs</button>
+              <button class="btn btn-sm btn-outline" id="btn-open-logs-dir">📂 Abrir Pasta</button>
+              <button class="btn btn-sm btn-outline" id="btn-clear-logs">🗑 Limpar</button>
+            </div>
           </div>
-          <div class="logs-box" id="logs-content">Carregando logs...</div>
+          <div class="logs-box" id="logs-content">Carregando logs da aplicação...</div>
         </div>
       </section>
 

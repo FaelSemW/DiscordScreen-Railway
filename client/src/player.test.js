@@ -108,6 +108,18 @@ function player(options = {}) {
   return p;
 }
 
+it('desenha quadros em PiP do Safari oculto sem depender de requestAnimationFrame', () => {
+  vi.stubGlobal('document', { visibilityState: 'hidden', pictureInPictureElement: null, addEventListener() {}, removeEventListener() {} });
+  let p;
+  try {
+    p = player({ isPictureInPicture: () => true });
+    p.push(pacote(KEYFRAME, 0));
+    p.push(pacote(DELTA, 16));
+    expect(desenhados).toEqual([0, 16]);
+    expect(pendentes).toHaveLength(0);
+  } finally { p?.destroy(); vi.unstubAllGlobals(); }
+});
+
 describe('ritmo de exibição', () => {
   it('não desenha o quadro na chegada — ele espera a vez', () => {
     const p = player();

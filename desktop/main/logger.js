@@ -9,16 +9,24 @@ class Logger {
     this.listeners = new Set();
     this.registeredSecrets = new Set();
 
-    const logDir = path.join(
-      process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
-      'DiscordScreenRailway',
+    this.logDir = path.join(
+      process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'),
+      'DC Screen Sharing',
       'logs',
     );
     try {
-      fs.mkdirSync(logDir, { recursive: true });
-      this.logFile = path.join(logDir, 'app.log');
+      fs.mkdirSync(this.logDir, { recursive: true });
+      this.logFile = path.join(this.logDir, 'app.log');
+      this.serverLogFile = path.join(this.logDir, 'server.log');
+      this.cloudflareLogFile = path.join(this.logDir, 'cloudflare.log');
+      this.broadcasterLogFile = path.join(this.logDir, 'broadcaster.log');
+      this.audioLogFile = path.join(this.logDir, 'audio.log');
     } catch {
       this.logFile = null;
+      this.serverLogFile = null;
+      this.cloudflareLogFile = null;
+      this.broadcasterLogFile = null;
+      this.audioLogFile = null;
     }
   }
 
@@ -42,13 +50,27 @@ class Logger {
     return sanitized;
   }
 
-  _log(level, ...args) {
+  _formatLine(level, category, args) {
     const timestamp = new Date().toISOString();
     const rawMessage = args
       .map((a) => (typeof a === 'object' ? JSON.stringify(a) : String(a)))
       .join(' ');
     const sanitizedMessage = this._maskSecrets(rawMessage);
-    const line = `[${timestamp}] [${level}] ${sanitizedMessage}`;
+    const cat = category ? ` [${category}]` : '';
+    return `[${timestamp}] [${level}]${cat} ${sanitizedMessage}`;
+  }
+
+  _writeTo(file, line) {
+    if (!file) return;
+    try {
+      fs.appendFileSync(file, `${line}\n`, 'utf8');
+    } catch {
+      // Ignore file logging error
+    }
+  }
+
+  _log(level, ...args) {
+    const line = this._formatLine(level, null, args);
 
     this.logs.push(line);
     if (this.logs.length > this.maxLogs) {
@@ -63,13 +85,7 @@ class Logger {
       console.log(line);
     }
 
-    if (this.logFile) {
-      try {
-        fs.appendFileSync(this.logFile, `${line}\n`, 'utf8');
-      } catch {
-        // Ignore file logging error
-      }
-    }
+    this._writeTo(this.logFile, line);
 
     for (const listener of this.listeners) {
       try {
@@ -92,6 +108,34 @@ class Logger {
     this._log('ERROR', ...args);
   }
 
+  server(level, ...args) {
+    const lvl = (level || 'INFO').toUpperCase();
+    const line = this._formatLine(lvl, 'SERVER', args);
+    this._writeTo(this.serverLogFile, line);
+    this._log(lvl, '[SERVER]', ...args);
+  }
+
+  cloudflare(level, ...args) {
+    const lvl = (level || 'INFO').toUpperCase();
+    const line = this._formatLine(lvl, 'CLOUDFLARE', args);
+    this._writeTo(this.cloudflareLogFile, line);
+    this._log(lvl, '[CLOUDFLARE]', ...args);
+  }
+
+  broadcaster(level, ...args) {
+    const lvl = (level || 'INFO').toUpperCase();
+    const line = this._formatLine(lvl, 'BROADCASTER', args);
+    this._writeTo(this.broadcasterLogFile, line);
+    this._log(lvl, '[BROADCASTER]', ...args);
+  }
+
+  audio(level, ...args) {
+    const lvl = (level || 'INFO').toUpperCase();
+    const line = this._formatLine(lvl, 'AUDIO', args);
+    this._writeTo(this.audioLogFile, line);
+    this._log(lvl, '[AUDIO]', ...args);
+  }
+
   onLog(callback) {
     this.listeners.add(callback);
     return () => this.listeners.delete(callback);
@@ -99,6 +143,10 @@ class Logger {
 
   getRecentLogs() {
     return [...this.logs];
+  }
+
+  getLogDirectory() {
+    return this.logDir;
   }
 }
 

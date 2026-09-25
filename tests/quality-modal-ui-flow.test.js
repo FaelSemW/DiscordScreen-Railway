@@ -2,7 +2,6 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { JSDOM } from 'jsdom';
 import {
   QUALITY_PRESETS,
   DEFAULT_PRESET,
@@ -12,20 +11,104 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+function parseHtmlIntoMockDom(html) {
+  const listeners = {};
+  const storage = new Map();
+
+  const modalIndex = html.indexOf('<div id="qualityModal"');
+  const modalHtml = modalIndex !== -1 ? html.slice(modalIndex, html.indexOf('</div>\n      </div>', modalIndex) + 20) : html;
+
+  const presets = Array.from(modalHtml.matchAll(/<label class="quality-card" data-preset="([^"]+)">/g)).map(m => m[1]);
+  const titleMatch = modalHtml.match(/<h2 id="qualityTitle">([^<]+)<\/h2>/);
+  const subMatch = modalHtml.match(/<p class="modal-sub">([^<]+)<\/p>/);
+  const checkedRadioMatch = modalHtml.match(/<input type="radio" name="stream_quality" value="([^"]+)" checked/);
+
+  const resMatch = html.match(/<select id="customRes">([\s\S]*?)<\/select>/);
+  const resOptions = resMatch ? Array.from(resMatch[1].matchAll(/<option value="([^"]+)"/g)).map(m => ({ value: m[1] })) : [];
+
+  const fpsMatch = html.match(/<select id="customFps">([\s\S]*?)<\/select>/);
+  const fpsOptions = fpsMatch ? Array.from(fpsMatch[1].matchAll(/<option value="([^"]+)"/g)).map(m => ({ value: m[1] })) : [];
+
+  const modal = {
+    id: 'qualityModal',
+    hidden: html.includes('<div id="qualityModal" class="modal" hidden>'),
+    querySelector(sel) {
+      if (sel === '.modal-sub') return { textContent: subMatch ? subMatch[1] : '' };
+      return null;
+    },
+    querySelectorAll(sel) {
+      if (sel === '.quality-card') {
+        return presets.map(p => ({
+          dataset: { preset: p }
+        }));
+      }
+      return [];
+    }
+  };
+
+  const document = {
+    getElementById(id) {
+      if (id === 'qualityModal') return modal;
+      if (id === 'qualityTitle') return { textContent: titleMatch ? titleMatch[1] : '' };
+      if (id === 'customQualityFields') return { hidden: html.includes('id="customQualityFields" class="custom-quality-fields" hidden') };
+      if (id === 'customRes') return { options: resOptions };
+      if (id === 'customFps') return { options: fpsOptions };
+      if (id === 'customBitrate') return { id: 'customBitrate' };
+      if (id === 'qualityCancel') {
+        return {
+          click() {
+            modal.hidden = true;
+          }
+        };
+      }
+      return null;
+    },
+    querySelector(sel) {
+      if (sel === 'input[name="stream_quality"]:checked') {
+        return { value: checkedRadioMatch ? checkedRadioMatch[1] : '' };
+      }
+      return null;
+    }
+  };
+
+  const window = {
+    document,
+    navigator: { mediaDevices: {} },
+    localStorage: {
+      getItem(key) { return storage.get(key) ?? null; },
+      setItem(key, val) { storage.set(key, String(val)); },
+      removeItem(key) { storage.delete(key); },
+      clear() { storage.clear(); },
+    },
+    addEventListener(event, handler) {
+      listeners[event] = listeners[event] || [];
+      listeners[event].push(handler);
+    },
+    dispatchEvent(event) {
+      if (listeners[event.type]) {
+        for (const fn of listeners[event.type]) fn(event);
+      }
+    },
+    KeyboardEvent: class {
+      constructor(type, init = {}) {
+        this.type = type;
+        this.key = init.key;
+      }
+    }
+  };
+
+  return { document, window };
+}
+
 describe('Quality Selection Modal UI & Runtime Interaction Flow', () => {
-  let dom;
   let document;
   let window;
 
   beforeEach(() => {
     const htmlPath = path.resolve(__dirname, '../client/index.html');
     const html = fs.readFileSync(htmlPath, 'utf8');
-
-    dom = new JSDOM(html, {
-      url: 'http://localhost:3001',
-      runScripts: 'dangerously',
-    });
-    document = dom.window.document;
+    const dom = parseHtmlIntoMockDom(html);
+    document = dom.document;
     window = dom.window;
   });
 

@@ -1,10 +1,9 @@
 {
   "name": "discord-screen-railway",
-  "version": "1.0.0",
-  "description": "Discord Screen Railway - Private Client",
+  "version": "1.1.0",
+  "description": "Compartilhamento de tela com aplicativo Windows e player web",
   "author": "Fael",
   "private": true,
-  "packageManager": "traversal@1.0.0",
   "type": "module",
   "main": "desktop/main/index.js",
   "workspaces": [
@@ -12,22 +11,28 @@
     "server"
   ],
   "scripts": {
-    "build": "npm -w client run build",
+    "build": "node node_modules/vite/bin/vite.js build client",
     "start": "node server/index.js",
-    "dev": "npm run build && node server/index.js",
-    "desktop": "electron .",
-    "desktop:build": "npm run build && electron-builder --win nsis",
-    "desktop:pack": "npm run build && electron-builder --dir",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "desktop": "node node_modules/electron/cli.js .",
+    "desktop:build": "node node_modules/vite/bin/vite.js build client && node node_modules/electron-builder/cli.js --win nsis",
+    "desktop:pack": "node node_modules/vite/bin/vite.js build client && node node_modules/electron-builder/cli.js --dir",
+    "test": "node node_modules/vitest/vitest.mjs run",
+    "test:watch": "node node_modules/vitest/vitest.mjs",
+    "test:soak": "node tests/run-native-soak.js",
+    "desktop:prepare": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/prepare-desktop.ps1",
+    "desktop:portable": "node node_modules/vite/bin/vite.js build client && node node_modules/electron-builder/cli.js --win portable",
+    "desktop:release": "node node_modules/vite/bin/vite.js build client && node node_modules/electron-builder/cli.js --win nsis portable"
   },
   "build": {
-    "appId": "com.discordscreen.railway",
-    "productName": "Discord Screen Railway",
+    "appId": "com.dcscreensharing.selfhosted",
+    "productName": "DC Screen Sharing",
     "electronVersion": "43.4.1",
     "directories": {
-      "output": "dist/release"
+      "output": "dist"
     },
+    "asarUnpack": [
+      "desktop/bin/**/*"
+    ],
     "win": {
       "target": [
         {
@@ -44,17 +49,25 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": "always",
       "createStartMenuShortcut": true,
-      "shortcutName": "Discord Screen Railway",
-      "artifactName": "DiscordScreen-Railway-Setup.${ext}",
-      "uninstallDisplayName": "Discord Screen Railway"
+      "shortcutName": "DC Screen Sharing",
+      "artifactName": "DC-Screen-Sharing-Setup-1.1.0.exe",
+      "uninstallDisplayName": "DC Screen Sharing"
     },
     "files": [
       "desktop/**/*",
+      "!desktop/native/**/*",
+      "!desktop/bin/**/*.pdb",
       "server/**/*",
       "shared/**/*",
       "client/dist/**/*",
-      "package.json"
-    ]
+      "package.json",
+      "LICENSE",
+      "THIRD_PARTY_NOTICES.md",
+      "licenses/**/*"
+    ],
+    "portable": {
+      "artifactName": "DC-Screen-Sharing-Portable-1.1.0.exe"
+    }
   },
   "dependencies": {
     "dotenv": "^16.4.7",
@@ -66,5 +79,10 @@
     "electron-builder": "^26.15.3",
     "jsdom": "^30.0.1",
     "vitest": "^4.1.11"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/FaelSemW/DiscordScreen-Railway.git"
   }
 }

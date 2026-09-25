@@ -27,6 +27,15 @@ const api = {
   getMediaSources: () => ipcRenderer.invoke('picker-get-sources'),
   selectMediaSource: (data) => ipcRenderer.invoke('picker-select-source', data),
   cancelMediaSource: () => ipcRenderer.invoke('picker-cancel'),
+  getAudioExclusionStatus: () => ipcRenderer.invoke('audio-exclusion-status'),
+  startAudioExclusion: (params) => ipcRenderer.invoke('audio-exclusion-start', params),
+  stopAudioExclusion: () => ipcRenderer.invoke('audio-exclusion-stop'),
+  getDiscordProcessStatus: () => ipcRenderer.invoke('discord-process-status'),
+  onAudioPcmChunk: (callback) => {
+    const handler = (_event, chunk) => callback(chunk);
+    ipcRenderer.on('audio-pcm-chunk', handler);
+    return () => ipcRenderer.removeListener('audio-pcm-chunk', handler);
+  },
   onStateChange: (callback) => {
     const handler = (_event, state) => callback(state);
     ipcRenderer.on('state-change', handler);
@@ -37,10 +46,33 @@ const api = {
     ipcRenderer.on('log-line', handler);
     return () => ipcRenderer.removeListener('log-line', handler);
   },
+
+  restartTunnel: () => ipcRenderer.invoke('restart-tunnel'),
+  openLogsFolder: () => ipcRenderer.invoke('open-logs-folder'),
+
+  // ── Native Broadcaster ──────────────────────────────────────────────────
+  openBroadcaster: () => ipcRenderer.invoke('broadcaster-open'),
+  openMainWindow: () => ipcRenderer.invoke('open-main-window'),
+  broadcasterEnumerateSources: () => ipcRenderer.invoke('broadcaster-enumerate-sources'),
+  broadcasterStart: (opts) => ipcRenderer.invoke('broadcaster-start', opts),
+  broadcasterStop: () => ipcRenderer.invoke('broadcaster-stop'),
+  broadcasterGetState: () => ipcRenderer.invoke('broadcaster-get-state'),
+  broadcasterChangeSource: (opts) => ipcRenderer.invoke('broadcaster-change-source', opts),
+  onBroadcasterState: (callback) => {
+    const handler = (_event, state) => callback(state);
+    ipcRenderer.on('broadcaster-state', handler);
+    return () => ipcRenderer.removeListener('broadcaster-state', handler);
+  },
+  onBroadcasterStats: (callback) => {
+    const handler = (_event, stats) => callback(stats);
+    ipcRenderer.on('broadcaster-stats', handler);
+    return () => ipcRenderer.removeListener('broadcaster-stats', handler);
+  },
 };
 
-// Expose canonical namespace and compatibility alias
+// Expose canonical namespaces and compatibility alias
+contextBridge.exposeInMainWorld('dcScreenSharing', api);
 contextBridge.exposeInMainWorld('discordScreenRailway', api);
 contextBridge.exposeInMainWorld('electronAPI', api);
 
-console.log('[PRELOAD] Bridge exposed successfully on window.discordScreenRailway and window.electronAPI');
+console.log('[PRELOAD] Bridge exposed successfully on window.dcScreenSharing, window.discordScreenRailway and window.electronAPI');

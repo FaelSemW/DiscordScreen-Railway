@@ -19,10 +19,10 @@ describe('Desktop Config Manager Isolation & Encryption', () => {
     }
   });
 
-  it('uses isolated config location and default zaprecovery.online origin', () => {
+  it('uses isolated config location and default local origin', () => {
     const manager = new ConfigManager(tempConfigPath);
-    expect(manager.getPublicOrigin()).toBe('https://zaprecovery.online');
-    expect(manager.config.publicOrigin).toBe('https://zaprecovery.online');
+    expect(manager.getPublicOrigin()).toBe('http://127.0.0.1:3000');
+    expect(manager.config.publicOrigin).toBe('');
   });
 
   it('encrypts and decrypts client secret locally without storing plaintext', () => {

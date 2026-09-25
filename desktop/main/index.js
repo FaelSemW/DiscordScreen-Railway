@@ -14,15 +14,18 @@ import {
   openDiscordApp,
   openCapturePage,
 } from './discord.js';
+import { AudioExclusionManager } from './audio-exclusion-manager.js';
+import { broadcasterManager } from './broadcaster-manager.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// Ensure completely isolated userData directory
-app.setPath('userData', path.join(app.getPath('appData'), 'DiscordScreenRailway'));
-app.setAppUserModelId('com.discordscreen.railway');
+// Ensure completely isolated userData directory for DC Screen Sharing Self-Hosted
+app.setPath('userData', path.join(app.getPath('appData'), 'DC Screen Sharing'));
+app.setAppUserModelId('com.dcscreensharing.selfhosted');
 
 let mainWindow = null;
+let broadcasterWindow = null;
 let tray = null;
 let isQuitting = false;
 
@@ -49,14 +52,16 @@ process.on('unhandledRejection', (reason) => {
 // Single Instance Lock
 const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
-  logger.info('Outra instância do Discord Screen Railway já está em execução. Encerrando esta.');
+  logger.info('Outra instância do DC Screen Sharing já está em execução. Encerrando esta.');
   app.quit();
 } else {
   app.on('second-instance', () => {
-    if (mainWindow) {
+    if (mainWindow && !mainWindow.isDestroyed()) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.show();
       mainWindow.focus();
+    } else {
+      openMainWindow();
     }
   });
 
@@ -65,13 +70,13 @@ if (!gotTheLock) {
 
 function logEarlyDiagnostics() {
   logger.info('==================================================');
-  logger.info('DISCORD SCREEN RAILWAY — STARTUP DIAGNOSTICS');
+  logger.info('DC SCREEN SHARING — STARTUP DIAGNOSTICS (SELF-HOSTED)');
   logger.info(`App Version: ${app.getVersion()}`);
   logger.info(`Electron Version: ${process.versions.electron}`);
   logger.info(`Node Version: ${process.versions.node}`);
   logger.info(`Packaged Mode: ${app.isPackaged ? 'YES' : 'NO'}`);
   logger.info(`userData Path: ${app.getPath('userData')}`);
-  logger.info(`Target Server: https://zaprecovery.online`);
+  logger.info(`Mode: Local Backend + Cloudflare Tunnel`);
   logger.info('==================================================');
 }
 
@@ -79,6 +84,52 @@ let pendingDisplayMediaCallback = null;
 let cachedSources = [];
 let pickerWindow = null;
 const captureWindows = new Set();
+
+export const audioExclusionManager = new AudioExclusionManager({ logger });
+
+audioExclusionManager.on('data', (chunk) => {
+  for (const win of captureWindows) {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('audio-pcm-chunk', chunk);
+    }
+  }
+});
+
+// ── Broadcaster IPC (capture worker → main → WS) ──────────────────────────
+// Binary encoded chunks from the capture renderer
+ipcMain.on('broadcaster-chunk', (event, buffer) => {
+  if (event.sender !== broadcasterManager._captureWin?.webContents) return;
+  broadcasterManager.onEncodedChunk(buffer);
+});
+
+// JSON control messages from the capture renderer
+ipcMain.on('broadcaster-message', (event, msg) => {
+  if (event.sender !== broadcasterManager._captureWin?.webContents) return;
+  broadcasterManager.onCaptureMessage(msg);
+});
+
+// Forward broadcaster state changes to the broadcaster window
+broadcasterManager.on('state-change', (state) => {
+  if (broadcasterWindow && !broadcasterWindow.isDestroyed()) {
+    broadcasterWindow.webContents.send('broadcaster-state', state);
+  }
+  updateTrayMenu();
+});
+
+broadcasterManager.on('stats', (stats) => {
+  if (broadcasterWindow && !broadcasterWindow.isDestroyed()) {
+    broadcasterWindow.webContents.send('broadcaster-stats', stats);
+  }
+});
+
+broadcasterManager.on('session-created', ({ shareUrl }) => {
+  if (broadcasterWindow && !broadcasterWindow.isDestroyed()) {
+    broadcasterWindow.webContents.send('broadcaster-state', {
+      ...broadcasterManager.getState(),
+      shareUrl,
+    });
+  }
+});
 
 export async function openCaptureInElectron(captureUrl) {
   if (!captureUrl) return false;
@@ -95,11 +146,17 @@ export async function openCaptureInElectron(captureUrl) {
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: false,
+        backgroundThrottling: false,
       },
     });
 
     captureWindows.add(win);
-    win.on('closed', () => captureWindows.delete(win));
+    win.on('closed', () => {
+      captureWindows.delete(win);
+      if (captureWindows.size === 0) {
+        audioExclusionManager.stop().catch(() => {});
+      }
+    });
     await win.loadURL(captureUrl);
     return true;
   } catch (err) {
@@ -182,7 +239,7 @@ async function initApp() {
     });
   }
 
-  createMainWindow();
+  openMainWindow();
   createTray();
   setupIpc();
 
@@ -201,41 +258,48 @@ async function initApp() {
     }
   });
 
-  // Auto-start connection if configured and confirmed
-  const publicConfig = configManager.getPublicConfig();
-  if (
-    publicConfig.isConfigured &&
-    publicConfig.firstRunCompleted &&
-    publicConfig.confirmedPublicOrigin
-  ) {
-    logger.info('Iniciando conexão com Railway automaticamente...');
-    processManager.start().catch((err) => logger.error('Erro no auto-start:', err));
+  // Auto-start self-hosted services (Local Server + Cloudflare Tunnel)
+  logger.info('Iniciando infraestrutura self-hosted (Servidor Local + Cloudflare Tunnel)...');
+  processManager.start().catch((err) => logger.error('Erro no auto-start self-hosted:', err));
+}
+
+export function openMainWindow() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    if (mainWindow.isMinimized()) mainWindow.restore();
+    mainWindow.show();
+    mainWindow.focus();
+    return;
   }
+  createMainWindow();
 }
 
 function createMainWindow() {
   mainWindow = new BrowserWindow({
-    width: 960,
-    height: 740,
+    width: 980,
+    height: 760,
     minWidth: 840,
     minHeight: 640,
-    title: 'Discord Screen Railway',
+    title: 'DC Screen Sharing — Self-Hosted',
     backgroundColor: '#0c0e14',
-    show: false,
+    show: true,
     frame: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      backgroundThrottling: false,
     },
   });
 
   mainWindow.setMenuBarVisibility(false);
   mainWindow.loadFile(path.join(__dirname, '..', 'ui', 'index.html'));
+  mainWindow.show();
+  mainWindow.focus();
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
+    mainWindow.focus();
   });
 
   mainWindow.on('close', (event) => {
@@ -257,12 +321,9 @@ function createTray() {
     `;
     const icon = nativeImage.createFromBuffer(Buffer.from(svgIcon));
     tray = new Tray(icon.resize({ width: 16, height: 16 }));
-    tray.setToolTip('Discord Screen Railway');
+    tray.setToolTip('DC Screen Sharing — Transmissor de Tela');
     tray.on('click', () => {
-      if (mainWindow) {
-        mainWindow.show();
-        mainWindow.focus();
-      }
+      openBroadcasterWindow();
     });
     updateTrayMenu();
   } catch (err) {
@@ -275,48 +336,44 @@ function updateTrayMenu() {
 
   const currentState = processManager.getState();
   const isRunning = currentState.state === STATES.READY;
+  const bState = broadcasterManager.getState();
+  const isStreaming = bState.state === 'streaming';
 
   const contextMenu = Menu.buildFromTemplate([
     {
-      label: 'Abrir Discord Screen Railway',
-      click: () => {
-        if (mainWindow) {
-          mainWindow.show();
-          mainWindow.focus();
-        }
-      },
-    },
-    { type: 'separator' },
-    {
-      label: isRunning ? 'Reconectar Servidor' : 'Conectar Servidor',
-      click: () => {
-        processManager.start();
-      },
+      label: '📡 Abrir Transmissor de Tela',
+      click: () => openBroadcasterWindow(),
     },
     {
-      label: 'Copiar Endereço do Servidor',
-      click: () => {
-        clipboard.writeText('https://zaprecovery.online');
-      },
-    },
-    {
-      label: 'Abrir Discord',
-      click: () => openDiscordApp(),
-    },
-    {
-      label: 'Compartilhar Tela',
+      label: isStreaming ? '⏹ Parar Transmissão' : '▶ Iniciar Transmissão',
       click: async () => {
-        try {
-          const shareUrl = await processManager.createStreamingSession();
-          await openCaptureInElectron(shareUrl);
-        } catch (err) {
-          logger.error('Erro ao abrir compartilhamento:', err);
+        if (isStreaming) {
+          await broadcasterManager.stopBroadcast();
+        } else {
+          openBroadcasterWindow();
         }
       },
     },
     { type: 'separator' },
     {
-      label: 'Sair',
+      label: '🌐 Assistir no Navegador',
+      enabled: Boolean(isStreaming && broadcasterManager.getState().shareUrl),
+      click: () => {
+        const url = broadcasterManager.getState().shareUrl;
+        if (url) shell.openExternal(url);
+      },
+    },
+    {
+      label: '📋 Copiar Link de Visualização',
+      enabled: Boolean(isStreaming && broadcasterManager.getState().shareUrl),
+      click: () => {
+        const url = broadcasterManager.getState().shareUrl;
+        if (url) clipboard.writeText(url);
+      },
+    },
+    { type: 'separator' },
+    {
+      label: 'Sair do Transmissor',
       click: () => {
         isQuitting = true;
         app.quit();
@@ -325,6 +382,58 @@ function updateTrayMenu() {
   ]);
 
   tray.setContextMenu(contextMenu);
+}
+
+function openBroadcasterWindow() {
+  if (broadcasterWindow && !broadcasterWindow.isDestroyed()) {
+    broadcasterWindow.show();
+    broadcasterWindow.focus();
+    return;
+  }
+
+  broadcasterWindow = new BrowserWindow({
+    width: 540,
+    height: 680,
+    minWidth: 440,
+    minHeight: 460,
+    title: 'DC Screen Sharing — Native Broadcaster',
+    backgroundColor: '#0c0e14',
+    show: true,
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      backgroundThrottling: false,
+    },
+  });
+
+  broadcasterWindow.setMenuBarVisibility(false);
+  broadcasterWindow.loadFile(path.join(__dirname, '..', 'ui', 'broadcaster.html'));
+  broadcasterWindow.show();
+  broadcasterWindow.focus();
+
+  broadcasterWindow.once('ready-to-show', () => {
+    broadcasterWindow.show();
+    broadcasterWindow.focus();
+  });
+
+  broadcasterWindow.on('close', (event) => {
+    const isStreaming = ['starting', 'streaming'].includes(broadcasterManager.getState().state);
+    if (!isQuitting && (isStreaming || configManager.config.minimizeToTray)) {
+      event.preventDefault();
+      broadcasterWindow.hide();
+      logger.info('[Broadcaster] Window hidden to tray while running.');
+    }
+  });
+
+  broadcasterWindow.on('closed', async () => {
+    broadcasterWindow = null;
+    logger.info('[Broadcaster] Broadcaster window closed.');
+    updateTrayMenu();
+  });
+
+  updateTrayMenu();
 }
 
 function setupIpc() {
@@ -460,7 +569,7 @@ function setupIpc() {
     }
   });
 
-  ipcMain.handle('picker-select-source', (_event, { sourceId, shareAudio }) => {
+  ipcMain.handle('picker-select-source', async (_event, { sourceId, shareAudio, excludeDiscord }) => {
     if (!pendingDisplayMediaCallback) return false;
     const source = cachedSources.find((s) => s.id === sourceId);
     if (!source) {
@@ -471,9 +580,32 @@ function setupIpc() {
     }
 
     const isScreen = source.id.startsWith('screen:');
-    // Para tela inteira: loopback do sistema (sem mutar áudio local).
+    const shouldExclude = excludeDiscord !== false;
+    // Para tela inteira: loopback do sistema com exclusão do Discord ativa por padrão.
     // Para janela: objeto da própria janela para capturar áudio isolado.
     const audioOption = shareAudio ? (isScreen ? 'loopback' : source) : undefined;
+
+    if (isScreen && shareAudio && shouldExclude) {
+      try {
+        const started = await audioExclusionManager.start({ excludeDiscord: true });
+        if (!started || audioExclusionManager.state !== 'CAPTURING') {
+          logger.warn('[AudioExclusionManager] Helper não inicializou em estado CAPTURING. Verificando presença do Discord...');
+          const discordState = await audioExclusionManager.discordDetector.check();
+          if (discordState.isRunning) {
+            logger.warn('[AudioExclusionManager] Discord está ativo e o helper falhou. Desativando áudio do sistema para proteger privacidade.');
+            audioOption = undefined;
+          }
+        }
+      } catch (err) {
+        logger.warn(`[AudioExclusionManager] Erro ao iniciar captura com exclusão: ${err.message}`);
+        const discordState = await audioExclusionManager.discordDetector.check();
+        if (discordState.isRunning) {
+          audioOption = undefined;
+        }
+      }
+    } else {
+      audioExclusionManager.stop().catch(() => {});
+    }
 
     logger.info(
       `[SourcePicker] Selecionado: "${source.name}" (screen=${isScreen}, audio=${audioOption || 'none'})`,
@@ -489,7 +621,26 @@ function setupIpc() {
     return true;
   });
 
+  ipcMain.handle('audio-exclusion-status', () => {
+    return audioExclusionManager.getState();
+  });
+
+  ipcMain.handle('audio-exclusion-start', async (_event, params) => {
+    const ok = await audioExclusionManager.start(params);
+    return { ok, state: audioExclusionManager.getState() };
+  });
+
+  ipcMain.handle('audio-exclusion-stop', async () => {
+    await audioExclusionManager.stop();
+    return { ok: true, state: audioExclusionManager.getState() };
+  });
+
+  ipcMain.handle('discord-process-status', async () => {
+    return await audioExclusionManager.discordDetector.check();
+  });
+
   ipcMain.handle('picker-cancel', () => {
+    audioExclusionManager.stop().catch(() => {});
     if (pendingDisplayMediaCallback) {
       pendingDisplayMediaCallback({});
       pendingDisplayMediaCallback = null;
@@ -514,6 +665,41 @@ function setupIpc() {
     return await diagnosticsManager.generateReport(state.state, state.publicUrl, state);
   });
 
+  ipcMain.handle('open-main-window', () => {
+    openMainWindow();
+    return true;
+  });
+
+  // ── Native Broadcaster IPC handlers ────────────────────────────────────
+  ipcMain.handle('broadcaster-open', () => {
+    openBroadcasterWindow();
+    return true;
+  });
+
+  ipcMain.handle('broadcaster-enumerate-sources', async () => {
+    return await broadcasterManager.enumerateSources();
+  });
+
+  ipcMain.handle('broadcaster-start', async (_event, opts) => {
+    const result = await broadcasterManager.startBroadcast(opts);
+    updateTrayMenu();
+    return result;
+  });
+
+  ipcMain.handle('broadcaster-stop', async () => {
+    const result = await broadcasterManager.stopBroadcast();
+    updateTrayMenu();
+    return result;
+  });
+
+  ipcMain.handle('broadcaster-get-state', () => {
+    return broadcasterManager.getState();
+  });
+
+  ipcMain.handle('broadcaster-change-source', async (_event, opts) => {
+    return await broadcasterManager.changeSource(opts);
+  });
+
   ipcMain.handle('copy-to-clipboard', (_event, text) => {
     if (typeof text === 'string') {
       clipboard.writeText(text);
@@ -534,6 +720,21 @@ function setupIpc() {
     logger.info('[IPC] reset-config chamado.');
     await processManager.resetConfiguration(preservePreferences);
     return configManager.getPublicConfig();
+  });
+
+  ipcMain.handle('restart-tunnel', async () => {
+    logger.info('[IPC] restart-tunnel chamado.');
+    await processManager.manualReconnect();
+    return processManager.getState();
+  });
+
+  ipcMain.handle('open-logs-folder', async () => {
+    const dir = logger.getLogDirectory();
+    if (dir) {
+      await shell.openPath(dir);
+      return true;
+    }
+    return false;
   });
 
   ipcMain.handle('window-minimize', () => {
@@ -566,7 +767,10 @@ app.on('before-quit', async (event) => {
     event.preventDefault();
     try {
       await Promise.race([
-        processManager.stop(),
+        Promise.all([
+          processManager.stop(),
+          broadcasterManager.stopBroadcast().catch(() => {}),
+        ]),
         new Promise((resolve) => setTimeout(resolve, 3000)),
       ]);
     } catch {

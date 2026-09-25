@@ -55,7 +55,7 @@ export function signToken(payload, ttlSeconds = null) {
 export function verifyToken(token) {
   if (typeof token !== 'string' || !token.includes('.')) return null;
   const [body, sig] = token.split('.');
-  if (!body || !sig) return null;
+  if (!body || !sig || !/^[A-Za-z0-9_-]{43}$/.test(sig)) return null;
 
   const expected = hmac(body);
   // Comparação em tempo constante — evita vazar o segredo por timing.

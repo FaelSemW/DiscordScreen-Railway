@@ -9,6 +9,10 @@ import { signToken, verifyToken } from './tokens.js';
 const SEGREDO = process.env.SESSION_SECRET;
 const AMBIENTE = { ...process.env };
 
+it('rejeita assinaturas multibyte sem lançar exceção', () => {
+  expect(verifyToken('e30.' + 'é'.repeat(43))).toBeNull();
+});
+
 /**
  * Uma instância nova do módulo, para os cenários que dependem do ambiente: o
  * segredo é lido na primeira assinatura e guardado até o fim do processo. O

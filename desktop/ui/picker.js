@@ -27,13 +27,16 @@ function switchTab(tab) {
   const isScreen = tab === 'screens';
   const textEl = $('audio-toggle-text');
   const subEl = $('audio-toggle-sub');
+  const includeDiscordLabel = $('label-include-discord');
 
   if (isScreen) {
     if (textEl) textEl.textContent = 'Compartilhar áudio do sistema';
-    if (subEl) subEl.textContent = 'Transmite todo o áudio do computador (jogos, mídia e som do sistema).';
+    if (subEl) subEl.textContent = 'Transmite áudio do computador (jogos, YouTube, músicas) sem a chamada do Discord.';
+    if (includeDiscordLabel) includeDiscordLabel.style.display = 'inline-flex';
   } else {
     if (textEl) textEl.textContent = 'Compartilhar áudio do aplicativo';
     if (subEl) subEl.textContent = 'Transmite o áudio gerado exclusivamente pela janela escolhida.';
+    if (includeDiscordLabel) includeDiscordLabel.style.display = 'none';
   }
 
   selectedSourceId = null;
@@ -133,9 +136,11 @@ function confirmShare() {
   if (!bridge || typeof bridge.selectMediaSource !== 'function') return;
 
   const shareAudio = $('check-system-audio')?.checked ?? true;
+  const includeDiscord = $('check-include-discord')?.checked ?? false;
   bridge.selectMediaSource({
     sourceId: selectedSourceId,
     shareAudio,
+    excludeDiscord: !includeDiscord,
   });
 }
 

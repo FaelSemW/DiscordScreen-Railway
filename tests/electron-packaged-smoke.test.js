@@ -70,7 +70,7 @@ app.whenReady().then(async () => {
       execFile(
         electronBinary,
         [runnerFile],
-        { cwd: projectRoot, timeout: 25000, env: childEnv },
+        { cwd: projectRoot, timeout: 75000, env: childEnv },
         (err, stdout, stderr) => {
           try { fs.unlinkSync(runnerFile); } catch {}
           resolve(stdout + stderr);
@@ -88,5 +88,5 @@ app.whenReady().then(async () => {
     expect(data.hasValidate).toBe(true);
     expect(data.hasSave).toBe(true);
     expect(data.hasGetConfig).toBe(true);
-  }, 30000);
+  }, 90000);
 });

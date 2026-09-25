@@ -3,11 +3,17 @@ import { WebSocket } from 'ws';
 import { logger } from './logger.js';
 import { configManager } from './config.js';
 import { exchangeOAuthCode } from './discord.js';
+import { localServerManager, SERVER_STATES } from './local-server-manager.js';
+import { cloudflareManager, CLOUDFLARE_STATES } from './cloudflare-manager.js';
+import { broadcasterManager } from './broadcaster-manager.js';
 
 export const STATES = {
   IDLE: 'idle',
   CHECKING_CONFIG: 'checking_config',
   CONNECTING_SERVER: 'connecting_server',
+  CONNECTING: 'connecting',
+  STARTING_SERVER: 'starting_server',
+  STARTING_TUNNEL: 'starting_tunnel',
   WAITING_DISCORD_CONFIGURATION: 'waiting_discord_configuration',
   DISCORD_CONFIG_REQUIRED: 'waiting_discord_configuration',
   READY: 'ready',
@@ -19,46 +25,93 @@ export class ProcessManager extends EventEmitter {
   constructor() {
     super();
     this.state = STATES.IDLE;
-    this.controlWs = null;
     this.lastError = null;
     this.startPromise = null;
-    this.reconnectTimer = null;
     this.isStopping = false;
+
+    // Control channel & reconnect compatibility state
+    this.controlWs = null;
+    this.reconnectTimer = null;
     this._connectPromise = null;
     this._connectionGeneration = 0;
-    // Tracks the active ping interval so we can clear it when replacing a WS
     this._pingInterval = null;
-    // Reconnect backoff state
     this._reconnectAttempts = 0;
-    // Tier 2: Passive standby timer for persistent background recovery
     this.passiveStandbyTimer = null;
+
+    // Listen to local server events
+    localServerManager.on('state-change', (sState) => {
+      this._syncBroadcasterUrls();
+      this.emit('state-change', this.getState());
+    });
+
+    // Listen to cloudflare events
+    cloudflareManager.on('state-change', (cState) => {
+      this._syncBroadcasterUrls();
+      this.emit('state-change', this.getState());
+    });
+
+    cloudflareManager.on('url-discovered', (url) => {
+      logger.info(`[ProcessManager] Nova URL pública descoberta: ${url}`);
+      localServerManager.updatePublicOrigin(url);
+      this._syncBroadcasterUrls();
+      this.emit('state-change', this.getState());
+    });
+
+    cloudflareManager.on('url-changed', ({ oldUrl, newUrl }) => {
+      logger.warn(`[ProcessManager] URL do Cloudflare alterada: ${oldUrl} -> ${newUrl}`);
+      localServerManager.updatePublicOrigin(newUrl);
+      this._syncBroadcasterUrls();
+      this.emit('state-change', this.getState());
+    });
+  }
+
+  _syncBroadcasterUrls() {
+    const localUrl = localServerManager.getState().localUrl;
+    const publicUrl = cloudflareManager.getState().publicUrl || localUrl;
+    if (localUrl) {
+      broadcasterManager.setServerUrls({
+        localBaseUrl: localUrl,
+        publicBaseUrl: publicUrl,
+      });
+    }
   }
 
   getVerifiedPublicOrigin() {
-    return 'https://zaprecovery.online';
+    return cloudflareManager.getState().publicUrl || localServerManager.getState().localUrl || configManager.getPublicOrigin();
   }
 
   getState() {
+    const sState = localServerManager.getState();
+    const cState = cloudflareManager.getState();
     const verifiedOrigin = this.getVerifiedPublicOrigin();
     const isConfirmed = configManager.isDiscordConfigConfirmedFor(verifiedOrigin);
     const isConfigured = configManager.isConfigured();
+
+    let targetHostname = '';
+    try {
+      if (verifiedOrigin) {
+        targetHostname = new URL(verifiedOrigin).hostname;
+      }
+    } catch {}
 
     return {
       state: this.state,
       publicUrl: verifiedOrigin,
       verifiedPublicUrl: verifiedOrigin,
-      discordTarget: 'zaprecovery.online',
-      discordRedirect: 'https://zaprecovery.online/auth/callback',
+      discordTarget: targetHostname || '127.0.0.1',
+      discordRedirect: `${verifiedOrigin || 'http://127.0.0.1:3000'}/api/auth/discord/callback`,
       lastError: this.lastError,
       urlNeedsDiscordUpdate: Boolean(verifiedOrigin && !isConfirmed),
       discordConfigConfirmed: isConfirmed,
       confirmedPublicOrigin: configManager.getConfirmedPublicOrigin(),
-      serverRunning: this.state === STATES.READY,
-      tunnelRunning: true, // Permanent Railway infra is always available
-      publicEndpointReady: this.state === STATES.READY,
-      shareLinkAvailable: Boolean(this.state === STATES.READY && isConfirmed),
+      serverRunning: sState.state === SERVER_STATES.READY,
+      tunnelRunning: cState.state === CLOUDFLARE_STATES.CONNECTED,
+      publicEndpointReady: Boolean(verifiedOrigin),
+      shareLinkAvailable: Boolean(sState.state === SERVER_STATES.READY),
       isConfigured,
       clientId: configManager.getClientId(),
+      localPort: sState.port,
+      localUrl: sState.localUrl,
       reconnectAttempts: this._reconnectAttempts,
       pingIntervalActive: this._pingInterval !== null,
       reconnectTimerActive: this.reconnectTimer !== null,
@@ -69,15 +122,16 @@ export class ProcessManager extends EventEmitter {
   setState(newState, extra = {}) {
     this.state = newState;
     if (extra.lastError !== undefined) this.lastError = extra.lastError;
-    logger.info(`State changed: ${newState}`);
+    logger.info(`[ProcessManager] State changed: ${newState}`);
     this.emit('state-change', this.getState());
   }
 
-  async checkHealth(baseUrl = 'https://zaprecovery.online', timeoutMs = 4000) {
+  async checkHealth(baseUrl = null, timeoutMs = 4000) {
+    const targetUrl = baseUrl || localServerManager.getState().localUrl || 'http://127.0.0.1:3000';
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), timeoutMs);
-      const res = await fetch(`${baseUrl}/api/health`, {
+      const res = await fetch(`${targetUrl}/api/health`, {
         signal: controller.signal,
         headers: { Accept: 'application/json' },
       });
@@ -86,7 +140,7 @@ export class ProcessManager extends EventEmitter {
       const data = await res.json();
       return Boolean(data.ok);
     } catch (err) {
-      logger.warn(`Health check failed for ${baseUrl}: ${err.message}`);
+      logger.warn(`[ProcessManager] Health check failed for ${targetUrl}: ${err.message}`);
       return false;
     }
   }
@@ -117,55 +171,54 @@ export class ProcessManager extends EventEmitter {
     try {
       this.isStopping = false;
       this.lastError = null;
-      this.setState(STATES.CHECKING_CONFIG);
 
-      // 1. Validate credentials
+      // 1. Iniciar Servidor Local Express + WebSocket
+      this.setState(STATES.STARTING_SERVER);
+      logger.info('[ProcessManager] 1/2 Iniciando servidor local...');
+      const serverState = await localServerManager.start();
+
+      if (!serverState.port) {
+        throw new Error('Falha ao obter porta para o servidor local.');
+      }
+      logger.info(`[ProcessManager] Servidor local online em ${serverState.localUrl}`);
+
+      // 2. Iniciar Cloudflare Tunnel
+      this.setState(STATES.STARTING_TUNNEL);
+      logger.info(`[ProcessManager] 2/2 Iniciando Cloudflare Tunnel para a porta ${serverState.port}...`);
+      const cfState = await cloudflareManager.start(serverState.port);
+
+      logger.info(`[ProcessManager] Cloudflare Tunnel conectado com sucesso: ${cfState.publicUrl}`);
+
+      // 3. Sincronizar endpoints no Broadcaster
+      this._syncBroadcasterUrls();
+
+      // 4. Se tiver credenciais de Discord, verifica status
       const validation = configManager.validateDiscordConfiguration();
-      if (!validation.valid) {
-        this.setState(STATES.DISCORD_CONFIG_REQUIRED);
-        return this.getState();
-      }
-
-      // 2. Check if Discord Developer Portal configuration was confirmed
       const verifiedOrigin = this.getVerifiedPublicOrigin();
-      if (!configManager.isDiscordConfigConfirmedFor(verifiedOrigin)) {
-        this.setState(STATES.DISCORD_CONFIG_REQUIRED);
-        return this.getState();
-      }
 
-      // 3. Verify Railway server health
-      this.setState(STATES.CONNECTING_SERVER);
-      logger.info('Verificando status do servidor Railway em https://zaprecovery.online...');
-      const healthy = await this.checkHealth('https://zaprecovery.online');
-      if (!healthy) {
-        throw {
-          code: 'SERVER_UNAVAILABLE',
-          title: 'Servidor Railway Indisponível',
-          message:
-            'Não foi possível conectar ao servidor central em https://zaprecovery.online. Verifique sua conexão com a internet.',
-        };
+      if (validation.valid && !configManager.isDiscordConfigConfirmedFor(verifiedOrigin)) {
+        logger.info('[ProcessManager] URL pública alterada ou não confirmada para o Discord.');
       }
-
-      // 4. Connect Control WebSocket & register active Client ID
-      await this._connectControlChannel();
 
       this.setState(STATES.READY);
       return this.getState();
     } catch (err) {
-      logger.error('Erro ao inicializar Discord Screen Railway:', err);
+      logger.error('[ProcessManager] Erro durante inicialização do self-hosted:', err);
       this.setState(STATES.ERROR, {
         lastError: {
           code: err.code || 'STARTUP_ERROR',
-          title: err.title || 'Erro na Conexão',
-          message: err.message || 'Falha ao conectar com a infraestrutura Railway.',
-          technical: err.technical || err.stack || String(err),
+          title: 'Erro de Inicialização Self-Hosted',
+          message: err.message || 'Falha ao iniciar infraestrutura local.',
+          technical: err.stack,
         },
       });
       return this.getState();
     }
   }
 
-    async _connectControlChannel() {
+  // ── Backward-Compatible Control Channel / Reconnect ──────────────────────
+
+  async _connectControlChannel() {
     if (this.isStopping) return;
     if (this.controlWs && this.controlWs.readyState === WebSocket.OPEN) {
       return;
@@ -185,7 +238,6 @@ export class ProcessManager extends EventEmitter {
   async _doConnectControlChannel() {
     const currentGeneration = ++this._connectionGeneration;
 
-    // Clear any previous ping interval before replacing the WebSocket
     if (this._pingInterval) {
       clearInterval(this._pingInterval);
       this._pingInterval = null;
@@ -195,18 +247,14 @@ export class ProcessManager extends EventEmitter {
       const oldWs = this.controlWs;
       this.controlWs = null;
       try {
-        // Do NOT removeAllListeners — use terminate() which will fire 'close' on the old ws
-        // so its own local pingInterval (tracked on this._pingInterval above) is already cleared.
         oldWs.terminate();
-      } catch {
-        // Ignore
-      }
+      } catch {}
     }
 
-    const verifiedOrigin = this.getVerifiedPublicOrigin();
+    const verifiedOrigin = this.getVerifiedPublicOrigin() || 'http://127.0.0.1:3000';
     const wsBaseUrl = verifiedOrigin.replace(/^http/, 'ws');
     const wsUrl = `${wsBaseUrl}/control`;
-    logger.info(`[Connection:${currentGeneration}] Conectando canal de controle desktop em ${wsUrl}...`);
+    logger.info(`[Connection:${currentGeneration}] Conectando canal de controle em ${wsUrl}...`);
 
     return new Promise((resolve, reject) => {
       if (this.isStopping) {
@@ -221,16 +269,12 @@ export class ProcessManager extends EventEmitter {
         if (!resolved) {
           resolved = true;
           try { ws.terminate(); } catch {}
-          reject(new Error('Tempo limite esgotado ao conectar ao canal de controle do Railway.'));
+          reject(new Error('Tempo limite esgotado ao conectar ao canal de controle.'));
         }
       }, 8000);
 
       ws.on('ping', () => {
-        try {
-          ws.pong();
-        } catch {
-          // ignore
-        }
+        try { ws.pong(); } catch {}
       });
 
       ws.on('open', () => {
@@ -242,18 +286,15 @@ export class ProcessManager extends EventEmitter {
         }
         if (!resolved) {
           resolved = true;
-          logger.info(`[Connection:${currentGeneration}] Canal de controle conectado ao servidor Railway com sucesso.`);
+          logger.info(`[Connection:${currentGeneration}] Canal de controle conectado com sucesso.`);
           this._reconnectAttempts = 0;
 
-          // Store ping interval on the instance so _doConnectControlChannel can clear it
-          // when replacing this WebSocket
           this._pingInterval = setInterval(() => {
             if (ws.readyState === WebSocket.OPEN) {
               ws.send(JSON.stringify({ type: 'ping', timestamp: Date.now() }));
             }
           }, 10_000);
 
-          // Register active client ID
           ws.send(
             JSON.stringify({
               type: 'register-desktop',
@@ -280,12 +321,10 @@ export class ProcessManager extends EventEmitter {
           return;
         }
 
-        if (msg.type === 'pong') {
-          return;
-        }
+        if (msg.type === 'pong') return;
 
         if (msg.type === 'desktop-registered') {
-          logger.info(`[Connection:${currentGeneration}] Servidor Railway confirmou registro do Client ID: ${msg.activeClientId}`);
+          logger.info(`[Connection:${currentGeneration}] Servidor confirmou registro do Client ID: ${msg.activeClientId}`);
         } else if (msg.type === 'oauth-exchange-request') {
           await this._handleOAuthExchangeRequest(msg);
         }
@@ -300,7 +339,7 @@ export class ProcessManager extends EventEmitter {
           if (this.controlWs === ws) {
             this.controlWs = null;
           }
-          logger.warn(`[Connection:${currentGeneration}] Canal de controle do Railway desconectado.`);
+          logger.warn(`[Connection:${currentGeneration}] Canal de controle desconectado.`);
           if (!this.isStopping && this.state === STATES.READY) {
             this._scheduleReconnect();
           }
@@ -317,7 +356,7 @@ export class ProcessManager extends EventEmitter {
             this.controlWs = null;
           }
         }
-        logger.error(`[Connection:${currentGeneration}] Erro no canal de controle do Railway: ${err.message}`);
+        logger.error(`[Connection:${currentGeneration}] Erro no canal de controle: ${err.message}`);
         clearTimeout(timeout);
         if (!resolved) {
           resolved = true;
@@ -339,7 +378,6 @@ export class ProcessManager extends EventEmitter {
         throw new Error('Client Secret não configurado no aplicativo Desktop.');
       }
 
-      // Execute token exchange locally using local secret!
       const accessToken = await exchangeOAuthCode(
         activeClientId,
         clientSecret,
@@ -347,7 +385,6 @@ export class ProcessManager extends EventEmitter {
         redirectUri,
       );
 
-      // Send access token back to Railway
       if (this.controlWs && this.controlWs.readyState === WebSocket.OPEN) {
         this.controlWs.send(
           JSON.stringify({
@@ -363,7 +400,7 @@ export class ProcessManager extends EventEmitter {
       if (this.controlWs && this.controlWs.readyState === WebSocket.OPEN) {
         this.controlWs.send(
           JSON.stringify({
-            type: 'oauth-exchange-response',
+            type: 'oauth-exchange-error',
             reqId,
             error: err.message,
           }),
@@ -384,8 +421,6 @@ export class ProcessManager extends EventEmitter {
       this.reconnectTimer = null;
     }
 
-    // TIER 1 — ACTIVE RECOVERY
-    // Bounded exponential backoff: 3s → 6s → 12s → 24s → 30s (max), cap at 8 attempts
     const MAX_ATTEMPTS = 8;
     const BASE_MS = 3000;
     const MAX_MS = 30_000;
@@ -397,7 +432,7 @@ export class ProcessManager extends EventEmitter {
       this.setState(STATES.ERROR, {
         lastError: {
           code: 'CONTROL_CHANNEL_LOST',
-          title: 'Conexão com Railway Perdida',
+          title: 'Conexão Perdida',
           message:
             'O canal de controle desconectou após múltiplas tentativas. Monitorando recuperação em segundo plano a cada 60s.',
         },
@@ -428,7 +463,6 @@ export class ProcessManager extends EventEmitter {
     }, delay);
   }
 
-  // TIER 2 — PASSIVE STANDBY
   _schedulePassiveStandby(delayMs = null) {
     if (this.isStopping) return;
 
@@ -452,7 +486,7 @@ export class ProcessManager extends EventEmitter {
       this.passiveStandbyTimer = null;
       if (this.isStopping || this.state !== STATES.ERROR) return;
 
-      logger.info('[Passive Standby] Sondando conectividade com o servidor Railway...');
+      logger.info('[Passive Standby] Sondando conectividade com o servidor...');
       try {
         await this._connectControlChannel();
         logger.info('[Passive Standby] Conexão restabelecida automaticamente! Retornando ao estado READY.');
@@ -463,7 +497,7 @@ export class ProcessManager extends EventEmitter {
         }
         this.setState(STATES.READY, { lastError: null });
       } catch (err) {
-        logger.warn(`[Passive Standby] Servidor Railway permanece inacessível (${err.message}). Mantendo standby.`);
+        logger.warn(`[Passive Standby] Servidor permanece inacessível (${err.message}). Mantendo standby.`);
         this._schedulePassiveStandby();
       }
     }, delay);
@@ -485,7 +519,11 @@ export class ProcessManager extends EventEmitter {
     this.setState(STATES.CONNECTING);
 
     try {
-      await this._connectControlChannel();
+      if (cloudflareManager.getState().state === CLOUDFLARE_STATES.CONNECTED || cloudflareManager.getState().state === CLOUDFLARE_STATES.STARTING) {
+        await cloudflareManager.restart();
+      } else {
+        await this._connectControlChannel();
+      }
       this.setState(STATES.READY, { lastError: null });
       return this.getState();
     } catch (err) {
@@ -497,10 +535,17 @@ export class ProcessManager extends EventEmitter {
   }
 
   async createStreamingSession() {
-    const baseUrl = this.getVerifiedPublicOrigin() || 'https://zaprecovery.online';
-    logger.info(`Solicitando criação de sessão de transmissão no servidor Railway (${baseUrl})...`);
+    const sState = localServerManager.getState();
+    const localBase = sState.localUrl;
+    const publicBase = cloudflareManager.getState().publicUrl || localBase;
 
-    const guestRes = await fetch(`${baseUrl}/api/session-guest`, {
+    if (!localBase) {
+      throw new Error('O servidor local não está em execução.');
+    }
+
+    logger.info(`[ProcessManager] Criando sessão de transmissão no servidor local (${localBase})...`);
+
+    const guestRes = await fetch(`${localBase}/api/session-guest`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'Desktop Broadcaster' }),
@@ -508,10 +553,10 @@ export class ProcessManager extends EventEmitter {
     }).then((r) => r.json());
 
     if (!guestRes?.identity) {
-      throw new Error('Falha ao emitir sessão anfitriã no servidor Railway.');
+      throw new Error('Falha ao emitir sessão anfitriã no servidor local.');
     }
 
-    const roomRes = await fetch(`${baseUrl}/api/rooms/create`, {
+    const roomRes = await fetch(`${localBase}/api/rooms/create`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -522,11 +567,17 @@ export class ProcessManager extends EventEmitter {
     }).then((r) => r.json());
 
     if (!roomRes?.shareUrl) {
-      throw new Error('Falha ao criar sala de transmissão no servidor Railway.');
+      throw new Error('Falha ao criar sala de transmissão no servidor local.');
     }
 
-    logger.info(`Sessão de transmissão criada com sucesso: ${roomRes.shareUrl}`);
-    return roomRes.shareUrl;
+    // Rebase share URL to public Cloudflare origin for remote viewers
+    let publicShareUrl = roomRes.shareUrl;
+    if (publicBase && publicBase !== localBase) {
+      publicShareUrl = publicShareUrl.replace(localBase, publicBase);
+    }
+
+    logger.info(`[ProcessManager] Sessão criada com sucesso: ${publicShareUrl}`);
+    return publicShareUrl;
   }
 
   confirmDiscordConfiguration(origin) {
@@ -534,7 +585,7 @@ export class ProcessManager extends EventEmitter {
     configManager.setConfirmedPublicOrigin(verified);
     configManager.config.firstRunCompleted = true;
     configManager.save();
-    logger.info('Configuração do Discord Developer Portal confirmada pelo usuário.');
+    logger.info(`[ProcessManager] Configuração do Discord confirmada para: ${verified}`);
     this.emit('state-change', this.getState());
     return true;
   }
@@ -548,41 +599,32 @@ export class ProcessManager extends EventEmitter {
 
   async stop() {
     this.isStopping = true;
-    clearTimeout(this.reconnectTimer);
-    this.reconnectTimer = null;
-    clearTimeout(this.passiveStandbyTimer);
-    this.passiveStandbyTimer = null;
-    this._reconnectAttempts = 0;
-    this.setState(STATES.STOPPING);
-
-    // Clear ping interval before closing WS
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (this.passiveStandbyTimer) {
+      clearTimeout(this.passiveStandbyTimer);
+      this.passiveStandbyTimer = null;
+    }
     if (this._pingInterval) {
       clearInterval(this._pingInterval);
       this._pingInterval = null;
     }
-
     if (this.controlWs) {
-      try {
-        this.controlWs.terminate();
-      } catch {
-        // Ignore
-      }
+      try { this.controlWs.terminate(); } catch {}
       this.controlWs = null;
     }
 
-    // Wait for any in-flight connect promise to settle (with bounded timeout)
-    if (this._connectPromise) {
-      try {
-        await Promise.race([
-          this._connectPromise,
-          new Promise((_, reject) =>
-            setTimeout(() => reject(new Error('connect timeout during stop')), 3000),
-          ),
-        ]);
-      } catch {
-        // Expected — connection aborted
-      }
-    }
+    this.setState(STATES.STOPPING);
+
+    try {
+      await cloudflareManager.stop();
+    } catch {}
+
+    try {
+      await localServerManager.stop();
+    } catch {}
 
     this.setState(STATES.IDLE);
     return this.getState();

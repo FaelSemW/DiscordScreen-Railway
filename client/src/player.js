@@ -9,12 +9,15 @@ import {
   LATENCY_MODES,
   usToMs,
 } from '../../shared/latency-policy.js';
+import { BUILD_METADATA } from '../../shared/build-metadata.js';
 
 export { LATENCY_MODES };
 
 export function createPlayer(
   canvas,
-  { onError, onTamanho, onNeedKeyframe, getAudioClock, latencyMode = DEFAULT_LATENCY_MODE } = {},
+  { onError, onTamanho, onNeedKeyframe, getAudioClock, latencyMode = DEFAULT_LATENCY_MODE,
+    isPictureInPicture = () => typeof document !== 'undefined' && Boolean(document.pictureInPictureElement),
+  } = {},
 ) {
   const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
 
@@ -91,6 +94,11 @@ export function createPlayer(
 
   let droppedLateCount = 0;
   let droppedRecoveryCount = 0;
+  let videoHeldForPresentation = 0;
+  let videoDroppedStale = 0;
+  let videoDroppedDecoderPressure = 0;
+  let videoDroppedTransportRecovery = 0;
+  let videoDroppedOther = 0;
   let hardResyncCount = 0;
   let softCorrectionCount = 0;
   let decoderReconfigureCount = 0;
@@ -142,6 +150,73 @@ export function createPlayer(
   let rafId = null;
   let virgem = true;
 
+  let isHidden = typeof document !== 'undefined' && document.visibilityState === 'hidden';
+  let newestCandidateFrame = null;
+  let newestCandidateMeta = null;
+
+  function onVisibilityChange() {
+    if (typeof document === 'undefined') return;
+    const isPipActive = isPictureInPicture();
+    const nowHidden = document.visibilityState === 'hidden' && !isPipActive;
+    if (nowHidden) {
+      isHidden = true;
+      // BACKGROUND_PRESENTATION_MODE: descarta fila acumulada mantendo no máximo 1 candidato recente
+      while (fila.length > 1) {
+        const item = fila.shift();
+        item.frame.close();
+        framesClosed++;
+        framesDropped++;
+      }
+      if (fila.length === 1) {
+        if (newestCandidateFrame) {
+          newestCandidateFrame.close();
+          framesClosed++;
+        }
+        const last = fila.shift();
+        newestCandidateFrame = last.frame;
+        newestCandidateMeta = last;
+      }
+    } else {
+      isHidden = false;
+      performLiveEdgeRecovery();
+    }
+  }
+
+  function performLiveEdgeRecovery() {
+    // 1. Esvazia fila obsoleta
+    esvaziar();
+
+    // 2. Apresenta o candidato mais recente imediatamente para evitar tela preta ou congelamento
+    if (newestCandidateFrame) {
+      pintar(
+        newestCandidateFrame,
+        newestCandidateMeta?.isKeyframe ?? false,
+        newestCandidateMeta?.captureGapMs ?? 16.67,
+      );
+      newestCandidateFrame = null;
+      newestCandidateMeta = null;
+    }
+
+    // 3. Reinicia medições de tempo para convergir no live edge
+    playbackState = 'BUILDING';
+    playbackMediaTimeMs = null;
+    wallClockAnchorMs = null;
+    consecutiveHardResyncs = 0;
+
+    // 4. Solicita um keyframe limpo para recuperar continuidade
+    pedirKeyframe();
+
+    // 5. Retoma ritmo de RAF suavemente
+    agendar();
+  }
+
+  if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    document.addEventListener('enterpictureinpicture', onVisibilityChange);
+    document.addEventListener('leavepictureinpicture', onVisibilityChange);
+    document.addEventListener('dcss-pipchange', onVisibilityChange);
+  }
+
   function setLatencyMode(mode) {
     currentLatencyMode = mode;
     latencyConfig = getLatencyConfig(mode);
@@ -173,11 +248,34 @@ export function createPlayer(
       },
     });
 
-    try {
-      decoder.configure(config);
-    } catch {
-      onError?.(`Codec não suportado por este navegador: ${config.codec}`);
+    const candidateConfigs = [
+      { ...config },
+      (() => { const c = { ...config }; delete c.optimizeForLatency; return c; })(),
+      (() => { const c = { ...config }; delete c.hardwareAcceleration; delete c.optimizeForLatency; return c; })(),
+    ];
+
+    if (config.codec?.startsWith('avc1.')) {
+      candidateConfigs.push({ ...config, avc: { format: 'annexb' } });
+      const level = config.codec.slice(9) || '1f';
+      candidateConfigs.push({ ...config, codec: `avc1.42e0${level}`, avc: { format: 'annexb' } });
+      candidateConfigs.push({ ...config, codec: `avc1.4200${level}`, avc: { format: 'annexb' } });
+      candidateConfigs.push({ ...config, codec: `avc1.42e01f`, avc: { format: 'annexb' } });
+      candidateConfigs.push({ ...config, codec: `avc1.42001f` });
+    }
+
+    let configured = false;
+    for (const cand of candidateConfigs) {
+      try {
+        decoder.configure(cand);
+        configured = true;
+        break;
+      } catch {}
+    }
+
+    if (!configured) {
+      console.warn(`[player] Não foi possível configurar VideoDecoder para ${config.codec}`);
       decoder = null;
+      onError?.(`Codec não suportado por este dispositivo: ${config.codec}`);
       return false;
     }
 
@@ -261,6 +359,31 @@ export function createPlayer(
     const isKey = lastChunkWasKeyframe;
     const capGap = lastCaptureGapMs;
 
+    const isPipActive = isPictureInPicture();
+    if (isPipActive && typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+      // rAF is suspended in hidden Safari tabs. Present on decoded-frame arrival
+      // while native PiP is active instead of depending on a suspended callback.
+      esvaziar();
+      pintar(frame, isKey, capGap);
+      return;
+    }
+    if (isHidden && !isPipActive) {
+      // BACKGROUND_PRESENTATION_MODE: mantém decoder vivo, retendo apenas o frame mais novo
+      if (newestCandidateFrame) {
+        newestCandidateFrame.close();
+        framesClosed++;
+        framesDropped++;
+      }
+      newestCandidateFrame = frame;
+      newestCandidateMeta = {
+        tsMs,
+        isKeyframe: isKey,
+        captureGapMs: capGap,
+        receivedAt: agora,
+      };
+      return;
+    }
+
     if (fila.length && tsMs < fila[fila.length - 1].tsMs) {
       esvaziar();
       playbackState = 'BUILDING';
@@ -277,6 +400,15 @@ export function createPlayer(
 
     const liveFrames = fila.length;
     if (liveFrames > maxLiveFrames) maxLiveFrames = liveFrames;
+
+    // Fila delimitada por idade conforme política de latência ativa
+    while (fila.length > 1 && agora - fila[0].receivedAt > latencyConfig.hardMaxBufferMs) {
+      const stale = fila.shift();
+      stale.frame.close();
+      framesClosed++;
+      framesDropped++;
+      droppedRecoveryCount++;
+    }
 
     while (fila.length > latencyConfig.filaMax) {
       const dropped = fila.shift();
@@ -361,6 +493,7 @@ export function createPlayer(
     if (audioActive) {
       lastMediaClockSource = 'AUDIO';
       const rawAudioTime = audioClock.mediaTimestampMs;
+
       mediaPlaybackTime =
         audioToVideoOffsetMs !== null ? rawAudioTime + audioToVideoOffsetMs : rawAudioTime;
 
@@ -442,11 +575,17 @@ export function createPlayer(
         framesClosed++;
         framesDropped++;
         droppedLateCount++;
+        videoDroppedStale++;
         softCorrectionCount++;
       } else {
         itemParaPintar = item;
         break;
       }
+    }
+
+    if (!itemParaPintar && fila.length) {
+      // Quadro futuro legítimo: segurado para próxima RAF quando for devido (não descartado)
+      videoHeldForPresentation++;
     }
 
     if (itemParaPintar) {
@@ -459,18 +598,36 @@ export function createPlayer(
   }
 
   function agendar() {
-    rafId ??= requestAnimationFrame(passo);
+    if (typeof document !== 'undefined' && isPictureInPicture() && document.visibilityState === 'hidden') {
+      rafId ??= setTimeout(passo, 16);
+    } else if (typeof requestAnimationFrame !== 'undefined') {
+      rafId ??= requestAnimationFrame(passo);
+    } else {
+      rafId ??= setTimeout(passo, 16);
+    }
   }
 
-  function esvaziar() {
+  function esvaziar(reason = 'recovery') {
+    const count = fila.length;
     while (fila.length) {
       const item = fila.shift();
       item.frame.close();
       framesClosed++;
       framesDropped++;
     }
+    if (reason === 'recovery') {
+      droppedRecoveryCount += count;
+      videoDroppedTransportRecovery += count;
+    } else if (reason === 'decoder') {
+      videoDroppedDecoderPressure += count;
+    } else {
+      videoDroppedOther += count;
+    }
     if (rafId !== null) {
-      cancelAnimationFrame(rafId);
+      if (typeof cancelAnimationFrame !== 'undefined') {
+        cancelAnimationFrame(rafId);
+      }
+      clearTimeout(rafId);
       rafId = null;
     }
   }
@@ -603,6 +760,11 @@ export function createPlayer(
     lastRafTime = null;
     lastReceiveTimestampUs = null;
     lastChunkWasKeyframe = false;
+    if (newestCandidateFrame) {
+      try { newestCandidateFrame.close(); } catch {}
+      newestCandidateFrame = null;
+      newestCandidateMeta = null;
+    }
     virgem = true;
     if (canvas.width && canvas.height) {
       ctx.fillStyle = '#000';
@@ -658,6 +820,7 @@ export function createPlayer(
       hardResyncsPerMinute > 2 || keyframeRequestsPerMinute > 6 ? 'DEGRADED' : 'HEALTHY';
 
     return {
+      build: BUILD_METADATA,
       receiveFps,
       decodeFps,
       renderFps,
@@ -719,6 +882,11 @@ export function createPlayer(
         droppedTotal: framesDropped,
         droppedLate: droppedLateCount,
         droppedRecovery: droppedRecoveryCount,
+        videoHeldForPresentation,
+        videoDroppedStale,
+        videoDroppedDecoderPressure,
+        videoDroppedTransportRecovery,
+        videoDroppedOther,
         p50: renStats.p50,
         p95: renStats.p95,
         p99: renStats.p99,
@@ -806,22 +974,46 @@ export function createPlayer(
     getMetrics,
     takeFrameCount: () => framesRendered,
     getSizes,
+    performLiveEdgeRecovery,
+    requestKeyframe: pedirKeyframe,
+    destroy: () => {
+      stop();
+      if (typeof document !== 'undefined' && typeof document.removeEventListener === 'function') {
+        document.removeEventListener('visibilitychange', onVisibilityChange);
+        document.removeEventListener('dcss-pipchange', onVisibilityChange);
+        document.removeEventListener('enterpictureinpicture', onVisibilityChange);
+        document.removeEventListener('leavepictureinpicture', onVisibilityChange);
+      }
+      if (longTaskObserver) {
+        longTaskObserver.disconnect();
+        longTaskObserver = null;
+      }
+    },
   };
 }
 
 function deserialize(c) {
+  const width = c.codedWidth || c.width;
+  const height = c.codedHeight || c.height;
   const out = {
     codec: c.codec,
-    codedWidth: c.codedWidth,
-    codedHeight: c.codedHeight,
     optimizeForLatency: true,
   };
+
+  if (width) out.codedWidth = width;
+  if (height) out.codedHeight = height;
+
+  if (c.hardwareAcceleration) {
+    out.hardwareAcceleration = c.hardwareAcceleration;
+  }
 
   if (c.description) {
     const bin = atob(c.description);
     const bytes = new Uint8Array(bin.length);
     for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
     out.description = bytes;
+  } else if (c.codec?.startsWith('avc1.')) {
+    out.avc = { format: 'annexb' };
   }
 
   return out;

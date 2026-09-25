@@ -6,5 +6,6 @@ export default defineConfig({
     environment: 'node',
     setupFiles: ['./vitest.setup.js'],
     include: ['server/**/*.test.js', 'shared/**/*.test.js', 'client/**/*.test.js', 'tests/**/*.test.js'],
+    pool: 'threads',
   },
 });

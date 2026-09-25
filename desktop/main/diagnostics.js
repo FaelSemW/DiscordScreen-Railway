@@ -1,33 +1,35 @@
 import os from 'node:os';
 import { logger } from './logger.js';
 import { configManager } from './config.js';
+import { BUILD_METADATA } from '../../shared/build-metadata.js';
 
 export class DiagnosticsManager {
   async generateReport(currentState, publicUrl, stateData = {}) {
     const timestamp = new Date().toISOString();
     const config = configManager.getPublicConfig();
 
-    const targetOrigin = (publicUrl || config.publicOrigin || 'https://zaprecovery.online').replace(/\/+$/, '');
+    const targetOrigin = (publicUrl || config.publicOrigin || config.localUrl || 'http://127.0.0.1:3000').replace(/\/+$/, '');
     const wsOrigin = targetOrigin.replace(/^http/, 'ws');
 
-    let railwayHealthy = false;
-    let railwayPingMs = null;
+    let endpointHealthy = false;
+    let endpointPingMs = null;
 
     try {
       const start = Date.now();
       const res = await fetch(`${targetOrigin}/api/health`, {
         signal: AbortSignal.timeout(4000),
       });
-      railwayPingMs = Date.now() - start;
-      railwayHealthy = res.ok;
+      endpointPingMs = Date.now() - start;
+      endpointHealthy = res.ok;
     } catch {
-      railwayHealthy = false;
+      endpointHealthy = false;
     }
 
     const report = {
       timestamp,
+      build: BUILD_METADATA,
       application: {
-        name: 'Discord Screen Railway',
+        name: 'DC Screen Sharing',
         version: config.version,
         platform: process.platform,
         arch: process.arch,
@@ -37,9 +39,12 @@ export class DiagnosticsManager {
       },
       infrastructure: {
         target: targetOrigin,
+        localPort: config.port,
+        localUrl: config.localUrl,
+        publicUrl: config.publicOrigin,
         websocket: `${wsOrigin}/ws`,
-        healthy: railwayHealthy,
-        latencyMs: railwayPingMs,
+        healthy: endpointHealthy,
+        latencyMs: endpointPingMs,
       },
       discordConfiguration: {
         configured: config.isConfigured,
@@ -54,10 +59,9 @@ export class DiagnosticsManager {
       runtimeState: {
         state: currentState,
         serverRunning: stateData.serverRunning ?? false,
-        controlConnected: stateData.publicEndpointReady ?? false,
-        pingIntervalActive: stateData.pingIntervalActive ?? false,
-        reconnectTimerActive: stateData.reconnectTimerActive ?? false,
-        passiveStandbyActive: stateData.passiveStandbyActive ?? false,
+        tunnelRunning: stateData.tunnelRunning ?? false,
+        serverState: stateData.serverState ?? 'unknown',
+        cloudflareState: stateData.cloudflareState ?? 'unknown',
         reconnectAttempts: stateData.reconnectAttempts ?? 0,
       },
       processMetrics: {

@@ -71,7 +71,7 @@ export const LATENCY_MODES = {
     lateSmoothCatchupThresholdMs: 180,
     lateSelectiveDropThresholdMs: 350,
     hardResyncThresholdMs: 1000,
-    filaMax: 30,
+    filaMax: 60,
     maxDecodeQueue: 6,
   },
   'ultra-low': {

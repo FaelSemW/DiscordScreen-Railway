@@ -5,3 +5,15 @@ client/dist/
 *.log
 .DS_Store
 coverage/
+.tools/
+scratch/
+work/
+outputs/
+.env.*
+!.env.example
+*.pem
+*.pfx
+desktop/bin/
+desktop/native/**/bin/
+desktop/native/**/obj/
+

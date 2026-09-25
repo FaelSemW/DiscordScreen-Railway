@@ -403,7 +403,7 @@ function countPeople(room) {
  */
 function derrubarAbandonadas(room, now) {
   for (const entry of room.broadcasters.values()) {
-    if (entry.info.id.startsWith('guest-') || entry.info.id.startsWith('dev-')) {
+    if (entry.info.background || entry.info.id.startsWith('guest-') || entry.info.id.startsWith('dev-')) {
       entry.semDonoDesde = null;
       continue;
     }
@@ -613,6 +613,7 @@ export function attachBroadcaster(room, ws, info, fonte = 'tela') {
         existing.reconnectGraceTimer = null;
       }
       existing.ws = ws;
+      existing.info = info;
       existing.semDonoDesde = null;
       existing.reconnectingSince = null;
       ws.__entry = existing;
@@ -665,10 +666,13 @@ export function attachBroadcaster(room, ws, info, fonte = 'tela') {
 }
 
 export function startStream(room, entry) {
+  // Reannouncing after a renderer/encoder recovery must not unsubscribe viewers.
+  if (entry.streaming) {
+    requestKeyframe(entry);
+    return;
+  }
   entry.streaming = true;
   entry.startedAt = Date.now();
-  entry.config = null;
-  entry.audioConfig = null;
   // Transmissão nova recomeça do zero: ninguém assiste até pedir.
   for (const v of room.viewers) {
     v.__primed?.delete(entry.slot);
@@ -826,10 +830,10 @@ export function handleBroadcasterDisconnect(room, ws, code, reason) {
 
   entry.reconnectGraceTimer = setTimeout(() => {
     if (entry.ws === null && room.broadcasters.get(entry.chave) === entry) {
-      console.log(`[room ${room.id}] janela de reconexão de ${entry.info.name} expirou (10s)`);
+      console.log(`[room ${room.id}] janela de reconexão de ${entry.info.name} expirou`);
       detachBroadcaster(room, ws);
     }
-  }, 10_000);
+  }, entry.info.background ? 5 * 60_000 : 10_000);
   entry.reconnectGraceTimer.unref?.();
 }
 
@@ -853,12 +857,12 @@ export function detachBroadcaster(room, ws) {
 export function watch(room, ws, slot) {
   const entry = room.slots.get(slot);
   if (!entry || !entry.streaming) return;
-  // Repetir o pedido não muda nada, mas custaria um broadcast de estado para a
-  // sala inteira — um cliente em laço faria o servidor inundar todo mundo.
-  if (ws.__watching.has(slot)) return;
 
-  ws.__watching.add(slot);
-  ws.__primed.delete(slot);
+  const alreadyWatching = ws.__watching.has(slot);
+  if (!alreadyWatching) {
+    ws.__watching.add(slot);
+    ws.__primed.delete(slot);
+  }
 
   if (entry.config) sendJson(ws, { type: 'config', slot, config: entry.config });
   if (entry.audioConfig) {
@@ -866,13 +870,15 @@ export function watch(room, ws, slot) {
   }
   requestKeyframe(entry);
 
-  // Convida o transmissor a abrir uma conexão direta com este espectador. É só
-  // um convite: enquanto ela não fecha — e ela pode nunca fechar — os quadros
-  // continuam chegando pelo relay, que já começou acima.
-  sendJson(entry.ws, { type: 'rtc-want', peer: ws.__peerId });
+  if (!alreadyWatching) {
+    // Convida o transmissor a abrir uma conexão direta com este espectador. É só
+    // um convite: enquanto ela não fecha — e ela pode nunca fechar — os quadros
+    // continuam chegando pelo relay, que já começou acima.
+    sendJson(entry.ws, { type: 'rtc-want', peer: ws.__peerId });
 
-  atualizarChunks(room, entry);
-  broadcastState(room);
+    atualizarChunks(room, entry);
+    broadcastState(room);
+  }
 }
 
 export function unwatch(room, ws, slot) {

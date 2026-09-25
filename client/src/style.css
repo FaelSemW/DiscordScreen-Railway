@@ -372,6 +372,63 @@ body {
   stroke-linecap: round;
 }
 
+.tile-pip {
+  position: absolute;
+  right: 44px;
+  bottom: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.tile:hover .tile-pip {
+  opacity: 1;
+}
+
+.tile-pip:hover {
+  background: var(--blurple);
+}
+
+.tile-pip svg {
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
+}
+
+@media (hover: none) {
+  .tile-stop,
+  .tile-pip {
+    opacity: 0.85;
+  }
+}
+
+#pipBtn.on {
+  background: var(--blurple);
+  color: #fff;
+}
+
+/* Keep relay PiP attached independently of tile rerenders and RTC negotiation.
+   It must not use display:none or visibility:hidden on WebKit. */
+.pip-relay-video {
+  position: fixed;
+  bottom: 0;
+  right: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0.01;
+  pointer-events: none;
+}
+
 /* ---------------------------------------------- espera do primeiro quadro */
 
 /* Cobre o canvas enquanto ele ainda é preto. pointer-events: none para não
@@ -1317,7 +1374,8 @@ button {
 }
 
 .volume:hover .volume-pop,
-.volume:focus-within .volume-pop {
+.volume:focus-within .volume-pop,
+.volume.open .volume-pop {
   display: flex;
 }
 
@@ -1525,6 +1583,7 @@ button {
 #app.palco.idle-hidden .bottombar,
 #app.palco.idle-hidden .tile-footer,
 #app.palco.idle-hidden .tile-stop,
+#app.palco.idle-hidden .tile-pip,
 #app.palco.idle-hidden .tile-watchers {
   opacity: 0 !important;
   pointer-events: none !important;
@@ -1535,6 +1594,7 @@ button {
 .bottombar,
 .tile-footer,
 .tile-stop,
+.tile-pip,
 .tile-watchers {
   transition: opacity 0.2s ease;
 }
@@ -1817,32 +1877,35 @@ button {
 
 .tile-audio-unlock {
   position: absolute;
-  top: 14px;
+  top: 16px;
   left: 50%;
   transform: translateX(-50%);
-  z-index: 25;
-  background: rgba(30, 31, 34, 0.88);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
+  z-index: 9999;
+  background: rgba(30, 31, 34, 0.95);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   color: #fff;
-  border: 1px solid rgba(88, 101, 242, 0.6);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), 0 0 12px rgba(88, 101, 242, 0.3);
-  padding: 8px 16px;
-  border-radius: 20px;
-  font-size: 13px;
-  font-weight: 600;
+  border: 2px solid #5865f2;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.6), 0 0 16px rgba(88, 101, 242, 0.6);
+  padding: 10px 20px;
+  border-radius: 24px;
+  font-size: 14px;
+  font-weight: 700;
   cursor: pointer;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
   transition: all 0.2s ease;
   animation: pulse-audio-btn 2s infinite ease-in-out;
 }
 
-.tile-audio-unlock:hover {
-  background: rgba(88, 101, 242, 0.9);
-  border-color: #5865f2;
-  transform: translateX(-50%) scale(1.03);
+.tile-audio-unlock:hover,
+.tile-audio-unlock:active {
+  background: #5865f2;
+  border-color: #7289da;
+  transform: translateX(-50%) scale(1.05);
 }
 
 @keyframes pulse-audio-btn {
@@ -1850,3 +1913,30 @@ button {
   50% { box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4), 0 0 16px rgba(88, 101, 242, 0.7); }
 }
 
+/* Overlay global de desbloqueio de áudio — aparece centralizado quando não há tile ainda */
+.audio-unlock-overlay {
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9000;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.audio-unlock-overlay .tile-audio-unlock {
+  position: static;
+  transform: none;
+  pointer-events: auto;
+  font-size: 15px;
+  padding: 12px 24px;
+  border-radius: 24px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 0 24px rgba(88, 101, 242, 0.5);
+  animation: pulse-audio-btn 1.5s infinite ease-in-out;
+}
+
+.audio-unlock-overlay .tile-audio-unlock:hover {
+  transform: scale(1.05);
+}

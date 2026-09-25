@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>DC Screen Sharing — Native Broadcaster</title>
+  <meta name="description" content="Native desktop broadcaster for DC Screen Sharing. Captures screen and audio independently of browser throttling.">
+  <link rel="stylesheet" href="broadcaster.css">
+</head>
+<body>
+  <div class="app-layout">
+
+    <!-- ── Header ── -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-icon">📡</div>
+        <div>
+          <div class="brand-name">DC Screen Sharing</div>
+          <div class="brand-sub">Native Broadcaster</div>
+        </div>
+      </div>
+      <div class="header-status" id="header-status">
+        <span class="dot gray" id="header-dot"></span>
+        <span id="header-status-text">Aguardando</span>
+      </div>
+    </header>
+
+    <!-- ── Scrollable content ── -->
+    <div class="app-scroll">
+
+      <!-- Error banner -->
+      <div class="error-banner" id="error-banner"></div>
+
+      <p style="font-size:12px; color:#b8c2d9; margin:0 0 12px;">Pode minimizar o aplicativo enquanto transmite. A qualidade se ajusta à capacidade do computador e da conexão. Para encerrar, use “Parar Transmissão” ou “Sair do Transmissor”.</p>
+
+      <!-- ── Room destination ── -->
+      <div class="card">
+        <div class="card-title">Destino da Transmissão</div>
+
+        <!-- Room mode tabs -->
+        <div class="source-tabs">
+          <button class="source-tab active" id="tab-room-create" data-room-mode="create">➕ Criar Nova Sala</button>
+          <button class="source-tab" id="tab-room-join" data-room-mode="join">🔗 Entrar em Sala Existente</button>
+        </div>
+
+        <!-- Mode: Create Room -->
+        <div id="panel-room-create">
+          <div class="input-group">
+            <label class="input-label" for="input-room-name">Nome da Sala</label>
+            <input type="text" id="input-room-name" class="input-text" value="Transmissão Nativa" placeholder="Ex: Jogatina, Reunião, Live...">
+          </div>
+          <div class="input-group" style="margin-top: 8px;">
+            <label class="input-label" for="input-room-password">Senha da Sala (Opcional)</label>
+            <input type="password" id="input-room-password" class="input-text" placeholder="Deixe em branco para sala pública">
+          </div>
+        </div>
+
+        <!-- Mode: Join Existing Room -->
+        <div id="panel-room-join" class="hidden">
+          <div class="input-group">
+            <label class="input-label" for="input-join-target">Link ou ID da Sala</label>
+            <input type="text" id="input-join-target" class="input-text" placeholder="Cole o link da transmissão (?t=...) ou ID da sala">
+          </div>
+          <div class="input-group" style="margin-top: 8px;">
+            <label class="input-label" for="input-join-password">Senha da Sala (se houver)</label>
+            <input type="password" id="input-join-password" class="input-text" placeholder="Senha da sala caso seja protegida">
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Source selection ── -->
+      <div class="card">
+        <div class="card-title">Fonte de Captura</div>
+
+        <!-- Type tabs -->
+        <div class="source-tabs">
+          <button class="source-tab active" id="tab-screen" data-type="screen">🖥 Monitor</button>
+          <button class="source-tab" id="tab-window" data-type="window">🪟 Janela</button>
+        </div>
+
+        <!-- Source grid -->
+        <div class="source-grid" id="source-grid">
+          <div class="source-loading">Carregando fontes...</div>
+        </div>
+
+        <!-- Refresh -->
+        <div style="margin-top: 10px; text-align: right;">
+          <button class="btn-sm" id="btn-refresh-sources">↺ Atualizar</button>
+        </div>
+      </div>
+
+      <!-- ── Audio ── -->
+      <div class="card">
+        <div class="card-title">Áudio da Transmissão</div>
+
+        <!-- Mode selector: Window Audio vs System Audio vs Off -->
+        <div class="source-tabs" id="audio-mode-tabs">
+          <button class="source-tab active" id="tab-audio-source" data-audio-mode="source">🪟 Áudio da Janela</button>
+          <button class="source-tab" id="tab-audio-system" data-audio-mode="system">🖥 Som do Sistema</button>
+          <button class="source-tab" id="tab-audio-off" data-audio-mode="none">🔇 Desativado</button>
+        </div>
+
+        <div id="audio-info-source" class="audio-info-box">
+          <span id="audio-source-desc">🎵 Captura exclusivamente os sons gerados pela janela selecionada.</span>
+        </div>
+
+        <div id="row-exclude-discord-wrapper" class="toggle-row hidden" style="margin-top: 8px;">
+          <div class="toggle-label">
+            <span>Excluir áudio do Discord</span>
+            <small>Impede que a voz da call do Discord seja transmitida</small>
+          </div>
+          <label class="toggle" for="toggle-exclude-discord">
+            <input type="checkbox" id="toggle-exclude-discord" checked>
+            <div class="toggle-track"></div>
+            <div class="toggle-thumb"></div>
+          </label>
+        </div>
+      </div>
+
+      <!-- ── Quality ── -->
+      <div class="card">
+        <div class="card-title">Qualidade</div>
+
+        <div class="preset-grid" id="preset-grid">
+          <button class="preset-btn" data-preset="economia">
+            <span class="preset-label">Economia</span>
+            <span class="preset-desc">720p · 30 FPS</span>
+          </button>
+          <button class="preset-btn" data-preset="equilibrado">
+            <span class="preset-label">Equilibrado</span>
+            <span class="preset-desc">900p · 30 FPS</span>
+          </button>
+          <button class="preset-btn" data-preset="alta">
+            <span class="preset-label">Alta</span>
+            <span class="preset-desc">1080p · 30 FPS</span>
+          </button>
+          <button class="preset-btn active" data-preset="maxima">
+            <span class="preset-label">Máxima</span>
+            <span class="preset-desc">1080p · 60 FPS</span>
+          </button>
+          <button class="preset-btn" data-preset="automatico">
+            <span class="preset-label">Auto ABR</span>
+            <span class="preset-desc">Adaptativo</span>
+          </button>
+          <button class="preset-btn" data-preset="4k60">
+            <span class="preset-label">4K</span>
+            <span class="preset-desc">2160p · 60 FPS*</span>
+          </button>
+        </div>
+
+        <div style="margin-top: 10px; font-size: 11px; color: var(--text-muted);">
+          * 4K requer GPU compatível. Será validado automaticamente.
+        </div>
+      </div>
+
+      <!-- ── Pipeline status ── -->
+      <div class="card">
+        <div class="card-title">Pipeline de Transmissão</div>
+        <div class="pipeline">
+          <div class="pipeline-stage" id="stage-capture">
+            <div class="stage-icon">🎥</div>
+            <div class="stage-name">Captura</div>
+            <div class="stage-value" id="stage-capture-fps">— fps</div>
+          </div>
+          <div class="pipeline-arrow">→</div>
+          <div class="pipeline-stage" id="stage-encode">
+            <div class="stage-icon">⚙️</div>
+            <div class="stage-name">Encoder</div>
+            <div class="stage-value" id="stage-encode-fps">— fps</div>
+          </div>
+          <div class="pipeline-arrow">→</div>
+          <div class="pipeline-stage" id="stage-send">
+            <div class="stage-icon">📡</div>
+            <div class="stage-name">Envio</div>
+            <div class="stage-value" id="stage-send-fps">— fps</div>
+          </div>
+          <div class="pipeline-arrow">→</div>
+          <div class="pipeline-stage" id="stage-viewers">
+            <div class="stage-icon">👁</div>
+            <div class="stage-name">Viewers</div>
+            <div class="stage-value" id="stage-viewers-count">—</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Diagnostics (collapsible) ── -->
+      <div class="card">
+        <div class="row">
+          <div class="card-title" style="margin-bottom:0;">Diagnósticos Avançados</div>
+          <div class="spacer"></div>
+          <button class="diag-toggle" id="btn-diag-toggle">▼ Expandir</button>
+        </div>
+
+        <div id="diag-panel" class="hidden">
+          <div class="diag-grid" style="margin-top: 14px;">
+
+            <div class="diag-section">
+              <div class="diag-label">Captura</div>
+              <div class="diag-row"><span class="dk">FPS (Raw / Admit)</span><span class="dv" id="d-cap-fps">—</span></div>
+              <div class="diag-row"><span class="dk">Resolução</span><span class="dv" id="d-cap-res">—</span></div>
+              <div class="diag-row"><span class="dk">Intervalo P50 / P95</span><span class="dv" id="d-cap-p95">—</span></div>
+              <div class="diag-row"><span class="dk">Gaps (>33ms / >100ms)</span><span class="dv" id="d-cap-gaps">0 / 0</span></div>
+              <div class="diag-row"><span class="dk">Drops (Dup / Obs)</span><span class="dv" id="d-cap-dup">0 / 0</span></div>
+              <div class="diag-row"><span class="dk">Drops (Enc / Transp)</span><span class="dv" id="d-cap-drop">0 / 0</span></div>
+            </div>
+
+            <div class="diag-section">
+              <div class="diag-label">Encoder</div>
+              <div class="diag-row"><span class="dk">FPS encode</span><span class="dv" id="d-enc-fps">—</span></div>
+              <div class="diag-row"><span class="dk">Aceleração HW</span><span class="dv" id="d-enc-hw" style="font-size:11px;">—</span></div>
+              <div class="diag-row"><span class="dk">Latência média</span><span class="dv" id="d-enc-lat">—</span></div>
+              <div class="diag-row"><span class="dk">Queue / Max</span><span class="dv" id="d-enc-queue">—</span></div>
+              <div class="diag-row"><span class="dk">Keyframes</span><span class="dv" id="d-enc-kf">0</span></div>
+            </div>
+
+            <div class="diag-section">
+              <div class="diag-label">Rede</div>
+              <div class="diag-row"><span class="dk">Enviados FPS</span><span class="dv" id="d-net-fps">—</span></div>
+              <div class="diag-row"><span class="dk">Fila WS (Buffer)</span><span class="dv" id="d-net-buf">0 B</span></div>
+              <div class="diag-row"><span class="dk">Total enviado</span><span class="dv" id="d-net-bytes">—</span></div>
+              <div class="diag-row"><span class="dk">WS status</span><span class="dv" id="d-net-ws">—</span></div>
+              <div class="diag-row"><span class="dk">Reconexões</span><span class="dv" id="d-net-recon">0</span></div>
+            </div>
+
+            <div class="diag-section">
+              <div class="diag-label">Áudio & Watchdog</div>
+              <div class="diag-row"><span class="dk">Fonte de áudio</span><span class="dv" id="d-aud-src" style="font-size:11px;">—</span></div>
+              <div class="diag-row"><span class="dk">Exclusão Discord</span><span class="dv" id="d-aud-excl">—</span></div>
+              <div class="diag-row"><span class="dk">Chunks/s</span><span class="dv" id="d-aud-chunks">—</span></div>
+              <div class="diag-row"><span class="dk">Watchdog recov.</span><span class="dv" id="d-watch-rec">0</span></div>
+            </div>
+
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /app-scroll -->
+
+    <!-- ── Footer: Start/Stop + share URL ── -->
+    <div class="footer-bar">
+      <div id="share-url-container" class="footer-share-url hidden">—</div>
+      <div class="spacer" id="footer-spacer"></div>
+
+      <button class="btn-sm hidden" id="btn-copy-url" title="Copiar link de visualização">📋 Copiar Link</button>
+      <button class="btn-sm hidden" id="btn-open-browser" title="Assistir transmissão no navegador">🌐 Abrir no Navegador</button>
+
+      <button class="btn-start" id="btn-start-stop" style="width: auto; min-width: 180px; font-size: 14px; padding: 12px 24px;">
+        ▶ Iniciar Transmissão
+      </button>
+    </div>
+
+  </div><!-- /app-layout -->
+
+  <script src="broadcaster.js"></script>
+</body>
+</html>

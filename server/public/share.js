@@ -590,6 +590,7 @@ function criarPainel(fonte) {
       },
       onAviso: (msg) => setStatus(msg, 'aviso'),
       onEnd: (reason) => {
+        releaseShareWakeLock();
         broadcaster = null;
         mostrarSetup();
         setStatus(reason);
@@ -604,6 +605,7 @@ function criarPainel(fonte) {
 
     try {
       const stream = await broadcaster.start();
+      await acquireShareWakeLock();
       el('preview').srcObject = stream;
       el('preview')
         .play()
@@ -613,6 +615,7 @@ function criarPainel(fonte) {
       if (!camera) $('somAba').hidden = false;
       chamar(null);
     } catch (err) {
+      releaseShareWakeLock();
       broadcaster = null;
       el('start').disabled = false;
       const negado = camera
@@ -622,6 +625,29 @@ function criarPainel(fonte) {
     }
   }
 
+  let shareWakeLock = null;
+  async function acquireShareWakeLock() {
+    try {
+      if ('wakeLock' in navigator && !shareWakeLock) {
+        shareWakeLock = await navigator.wakeLock.request('screen');
+        shareWakeLock.addEventListener('release', () => {
+          shareWakeLock = null;
+        });
+      }
+    } catch {}
+  }
+  function releaseShareWakeLock() {
+    if (shareWakeLock) {
+      shareWakeLock.release().catch(() => {});
+      shareWakeLock = null;
+    }
+  }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && broadcaster) {
+      acquireShareWakeLock();
+    }
+  });
+
   const indisponivel = fonteIndisponivel(fonte);
   if (indisponivel) {
     el('start').disabled = true;
@@ -630,9 +656,10 @@ function criarPainel(fonte) {
   }
 
   el('start').addEventListener('click', ligar);
-  el('stop').addEventListener('click', () =>
-    broadcaster?.stop(camera ? 'Câmera desligada.' : 'Transmissão encerrada.'),
-  );
+  el('stop').addEventListener('click', () => {
+    releaseShareWakeLock();
+    broadcaster?.stop(camera ? 'Câmera desligada.' : 'Transmissão encerrada.');
+  });
 
   el('escolher').addEventListener('click', (e) => {
     e.stopPropagation();

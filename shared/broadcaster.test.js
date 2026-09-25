@@ -1,4 +1,3 @@
-// @vitest-environment jsdom
 /**
  * O pipeline de transmissão, com dublês no lugar do navegador.
  *
@@ -335,9 +334,68 @@ function proximaCaptura() {
   return capturasPreparadas.shift();
 }
 
+class HTMLCanvasElementFake {
+  constructor() {
+    this.width = 1280;
+    this.height = 720;
+    this.style = {};
+  }
+  getContext() {
+    return { drawImage: vi.fn() };
+  }
+}
+
+class HTMLMediaElementFake {
+  constructor() {
+    this.style = {};
+  }
+  play() {
+    return Promise.resolve();
+  }
+  remove() {
+    const idx = elements.indexOf(this);
+    if (idx !== -1) elements.splice(idx, 1);
+  }
+}
+
+const elements = [];
+const documentFake = {
+  createElement: (tag) => {
+    let el;
+    if (tag === 'canvas') el = new HTMLCanvasElementFake();
+    else if (tag === 'video') el = new HTMLMediaElementFake();
+    else el = { style: {} };
+    el.tagName = tag.toUpperCase();
+    return el;
+  },
+  body: {
+    append: (el) => {
+      elements.push(el);
+    },
+  },
+  querySelector: (sel) => {
+    const s = sel.toLowerCase();
+    return elements.find((el) => el.tagName?.toLowerCase() === s) || null;
+  },
+};
+
+globalThis.HTMLCanvasElement = HTMLCanvasElementFake;
+globalThis.HTMLMediaElement = HTMLMediaElementFake;
+globalThis.document = documentFake;
+globalThis.window = globalThis;
+globalThis.requestAnimationFrame = (fn) => setTimeout(fn, 16);
+globalThis.cancelAnimationFrame = (id) => clearTimeout(id);
+
 /** Instala o navegador de mentira. `sem` remove capacidades, uma a uma. */
 function montarNavegador({ sem = [], restrictOwnAudio = true } = {}) {
   const tem = (nome) => !sem.includes(nome);
+
+  vi.stubGlobal('document', documentFake);
+  vi.stubGlobal('HTMLCanvasElement', HTMLCanvasElementFake);
+  vi.stubGlobal('HTMLMediaElement', HTMLMediaElementFake);
+  vi.stubGlobal('window', globalThis);
+  vi.stubGlobal('requestAnimationFrame', globalThis.requestAnimationFrame);
+  vi.stubGlobal('cancelAnimationFrame', globalThis.cancelAnimationFrame);
 
   vi.stubGlobal('navigator', {
     mediaDevices: {
@@ -399,6 +457,7 @@ async function noAr(extra = {}, stream = telaSimples()) {
 }
 
 beforeEach(() => {
+  elements.length = 0;
   relogioDeCaptura = 0;
   encoders = [];
   audioEncoders = [];
@@ -410,9 +469,8 @@ beforeEach(() => {
   VideoEncoderFalso.isConfigSupported.mockClear();
   vi.spyOn(console, 'warn').mockImplementation(() => {});
   vi.spyOn(console, 'error').mockImplementation(() => {});
-  // jsdom não desenha: o canvas do redimensionamento precisa de um contexto.
-  vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn() });
-  vi.spyOn(HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+  vi.spyOn(HTMLCanvasElementFake.prototype, 'getContext').mockReturnValue({ drawImage: vi.fn() });
+  vi.spyOn(HTMLMediaElementFake.prototype, 'play').mockResolvedValue(undefined);
   montarNavegador();
 });
 

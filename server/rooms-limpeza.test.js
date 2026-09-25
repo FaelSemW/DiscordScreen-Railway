@@ -40,6 +40,15 @@ beforeEach(() => {
 });
 
 describe('sala vazia', () => {
+  it('mantém uma transmissão desktop autenticada sem aba da Activity', () => {
+    const room = sala();
+    const captura = socket();
+    R.attachBroadcaster(room, captura, { id: 'discord-user', name: 'Desktop', background: true });
+    vi.advanceTimersByTime(2 * 60 * 60 * 1000);
+    expect(room.broadcasters.size).toBe(1);
+    expect(R.getRoom(room.id)).toBe(room);
+    expect(captura.recebidas.some(m => m.type === 'stop-request')).toBe(false);
+  });
   it('sobrevive à carência, e some depois dela', () => {
     const { id } = sala();
 

@@ -1,6 +1,7 @@
 import { DiscordSDK } from '@discord/embedded-app-sdk';
 import { createPlayer } from './player.js';
 import { createAudio } from './audio.js';
+import { createPictureInPicture } from './picture-in-picture.js';
 import { createBroadcaster } from '../../shared/broadcaster.js';
 import {
   QUALITY_PRESETS,
@@ -41,6 +42,11 @@ const streams = new Map(); // slot -> { userId, canvas, player }
 // disso, filtrar só na exibição gastaria a mesma saída.
 const available = new Map(); // slot -> { userId, config }
 const watching = new Set(); // slots que eu pedi para assistir
+// Slots que o usuário estava assistindo para auto-retomar se cair a conexão em background
+const rememberedWatchingSlots = new Set();
+let bgAudio = null;
+let wakeLock = null;
+let reconnectTimer = null;
 
 // Quem tem aba de captura aberta, segundo o servidor. É o que decide entre
 // falar com a aba existente e abrir outra.
@@ -85,10 +91,17 @@ const volumeEfetivo = (userId) => volume * (volumePessoa.get(userId) ?? 1);
 function aplicarVolume(slot) {
   const s = streams.get(slot);
   if (!s) return;
-  s.audio?.setVolume(volumeEfetivo(s.userId));
+  const vol = volumeEfetivo(s.userId);
+  s.audio?.setVolume(vol);
   // Pela conexão direta o som sai do próprio <video>, e não do decodificador
   // de áudio — o mesmo controle precisa alcançar os dois.
-  if (s.video) s.video.volume = Math.min(1, volumeEfetivo(s.userId));
+  if (s.video) {
+    s.video.volume = Math.min(1, Math.max(0, vol));
+    const temAudioRtc = s.viaRtc && (s.video.srcObject?.getAudioTracks?.().length ?? 0) > 0;
+    if (temAudioRtc) {
+      s.video.muted = (volume === 0 || vol === 0);
+    }
+  }
 }
 // Para onde o botão de silenciar volta. Sem isto, desmutar cairia sempre em
 // 100%, ignorando o ajuste que a pessoa tinha feito.
@@ -371,6 +384,10 @@ function getDiagnosticSnapshot() {
   return report;
 }
 
+if (typeof window !== 'undefined') {
+  window.getDiagnosticSnapshot = getDiagnosticSnapshot;
+}
+
 function copyStutterLog() {
   const report = getDiagnosticSnapshot();
   const json = JSON.stringify(report, null, 2);
@@ -476,17 +493,27 @@ function watchSlot(slot) {
   const info = available.get(slot);
   if (!info) return;
   watching.add(slot);
+  rememberedWatchingSlots.add(slot);
+  enableBackgroundPlayback();
   ws?.send(JSON.stringify({ type: 'watch', slot }));
+  // Abre o stream imediatamente para que o espectador veja o feedback de carregamento
+  if (!streams.has(slot)) {
+    openStream(slot, info.userId);
+  }
   // O config pode já ter chegado; se não, ele chega logo e dispara o start.
   if (info.config) {
-    openStream(slot, info.userId);
     startStream(slot, info.config);
+  }
+  if (info.audioConfig) {
+    startAudio(slot, info.audioConfig);
   }
   renderGrid();
 }
 
 function unwatchSlot(slot) {
   watching.delete(slot);
+  rememberedWatchingSlots.delete(slot);
+  disableBackgroundPlaybackIfEmpty();
   ws?.send(JSON.stringify({ type: 'unwatch', slot }));
   closeStream(slot);
   renderGrid();
@@ -573,6 +600,7 @@ function renderGrid() {
     grid.hidden = true;
     $('empty').hidden = true;
     $('fullscreen').hidden = true;
+    if ($('pipBtn')) $('pipBtn').hidden = true;
     $('watchSite').hidden = true;
     $('app').classList.remove('cheia', 'flutua', 'palco');
     return;
@@ -628,6 +656,7 @@ function renderGrid() {
 
   const noPalco = activeSlot !== null;
   $('fullscreen').hidden = !noPalco;
+  if ($('pipBtn')) $('pipBtn').hidden = !noPalco;
   // A classe vai no #app, e não na grade: quem sai do layout são as barras, que
   // são irmãs dela. Fica acima do `return` de sala vazia — senão as barras
   // continuariam flutuando sobre o painel de "ninguém na sala".
@@ -676,6 +705,9 @@ function renderGrid() {
     const entradas = entradasDoGrid();
     grid.style.setProperty('--cols', columnsFor(entradas.length));
     grid.append(...entradas.map((e) => buildTile(e.p, { slot: e.slot }).el));
+    for (const slot of watching) {
+      atualizarAudioUnlock(slot);
+    }
     return;
   }
 
@@ -685,10 +717,12 @@ function renderGrid() {
     name: 'Transmitindo',
     broadcasting: true,
   };
-  // O slot em destaque, e não o da pessoa: cada transmissão tem um nó de canvas
-  // só, então montar o palco com o slot errado o arranca do tile que o estava
-  // mostrando — e um dos dois fica preto, conforme a ordem do desenho.
   grid.append(buildTile(emCena, { palco: true, slot: activeSlot }).el);
+
+  // Garante que o botão de desbloqueio de áudio seja reinserido no tile recém-criado
+  for (const slot of watching) {
+    atualizarAudioUnlock(slot);
+  }
 
   // Se estiver em tela cheia OU em modo single stream (única transmissão ativa),
   // o palco já consome 100% do viewport do Discord — não anexa sidebar.
@@ -804,7 +838,19 @@ function buildTile(p, { palco = false, semVideo = false, slot: slotDado = null }
   };
 
   if (stream) {
-    tile.append(noDe(stream));
+    stream.video.setAttribute('playsinline', '');
+    stream.video.setAttribute('webkit-playsinline', '');
+    const temAudioRtc = stream.viaRtc && (stream.video.srcObject?.getAudioTracks?.().length ?? 0) > 0;
+    const vol = volumeEfetivo(stream.userId);
+    stream.video.muted = !temAudioRtc || volume === 0 || vol === 0;
+    stream.video.volume = Math.min(1, Math.max(0, vol));
+
+    // Conecta ambos os nós ao DOM para que o WebKit no mobile não congele o vídeo
+    tile.append(stream.canvas);
+    tile.append(stream.video);
+    stream.canvas.style.display = stream.viaRtc ? 'none' : 'block';
+    stream.video.style.display = stream.viaRtc ? 'block' : 'none';
+
     tile.title = palco
       ? telaCheia
         ? 'Clique para sair da tela cheia'
@@ -834,6 +880,21 @@ function buildTile(p, { palco = false, semVideo = false, slot: slotDado = null }
       unwatchSlot(slot);
     });
     tile.append(stop);
+
+    // Botão de Janela Flutuante (Picture-in-Picture) direto no tile
+    const pip = document.createElement('button');
+    pip.className = 'tile-pip';
+    pip.dataset.tip = 'Janela flutuante (PiP)';
+    pip.setAttribute('aria-label', `Janela flutuante ${p.name}`);
+    pip.innerHTML =
+      '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M19 7h-8v6h8V7zm2-4H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16.01H3V4.99h18v14.02z" fill="currentColor"/></svg>';
+    pip.addEventListener('click', (e) => {
+      e.stopPropagation();
+      togglePictureInPicture(slot);
+    });
+    pip.addEventListener('pointerdown', () => warmupPictureInPicture(slot));
+    pip.addEventListener('focus', () => warmupPictureInPicture(slot));
+    tile.append(pip);
   } else if (slot !== null) {
     // O convite tem botão próprio, que para o clique antes de chegar no tile.
     if (!palco) tile.addEventListener('click', aoClicar);
@@ -956,11 +1017,24 @@ function iniciarWatchdogVideo(slot) {
     }
 
     atual.videoWatchdog = setTimeout(() => {
-      const finalS = streams.get(slot);
-      if (!finalS || finalS.started) return;
-      console.error(`[VIDEO slot=${slot}] Watchdog T+10s: nenhum quadro de vídeo recebido/renderizado`);
-      atualizarLoading(slot, 'VIDEO_ERROR');
-    }, 6000);
+      const meioS = streams.get(slot);
+      if (!meioS || meioS.started) return;
+      console.warn(`[VIDEO slot=${slot}] Watchdog T+8s: reforçando pedido de keyframe e reconfigurando decoder`);
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'need-keyframe', slot }));
+      }
+      const cfg = available.get(slot)?.config;
+      if (cfg && !meioS.viaRtc) {
+        meioS.player?.start(cfg);
+      }
+
+      meioS.videoWatchdog = setTimeout(() => {
+        const finalS = streams.get(slot);
+        if (!finalS || finalS.started) return;
+        console.error(`[VIDEO slot=${slot}] Watchdog T+15s: nenhum quadro de vídeo recebido/renderizado`);
+        atualizarLoading(slot, 'VIDEO_ERROR');
+      }, 7000);
+    }, 4000);
   }, 4000);
 }
 
@@ -1282,8 +1356,8 @@ function renderBar() {
   cam.dataset.tip = rotuloCam;
   cam.setAttribute('aria-label', rotuloCam);
 
-  // O controle de som só existe quando há som para controlar.
-  const temSom = [...streams.values()].some((s) => s.audio);
+  // O controle de volume fica disponível sempre que houver stream ativa ou áudio configurado
+  const temSom = [...streams.values()].some((s) => s.audio || s.started) || watching.size > 0;
   $('volumeBox').hidden = !temSom;
   renderVolume();
 
@@ -1332,7 +1406,18 @@ function openStream(slot, userId) {
     firstChunkLogged: false,
   };
 
+  s.pip = createPictureInPicture({
+    canvas,
+    getRtcVideo: () => s.viaRtc ? s.video : null,
+    notify: toast,
+    onChange: () => {
+      $('pipBtn')?.classList.toggle('on', [...streams.values()].some(stream => stream.pip?.active));
+      document.dispatchEvent(new Event('dcss-pipchange'));
+    },
+  });
   s.player = createPlayer(canvas, {
+    isPictureInPicture: () => s.pip.active || document.pictureInPictureElement === s.video ||
+      s.video.webkitPresentationMode === 'picture-in-picture',
     onError: (m) => toast(m, true),
     onTamanho: (dim) => {
       s.started = true;
@@ -1377,6 +1462,11 @@ function openStream(slot, userId) {
 
   streams.set(slot, s);
   iniciarWatchdogVideo(slot);
+
+  const info = available.get(slot);
+  if (info?.audioConfig && !s.audio) {
+    startAudio(slot, info.audioConfig);
+  }
 }
 
 /** Liga o som desta transmissão. Chamado quando a config de áudio chega. */
@@ -1387,7 +1477,12 @@ function startAudio(slot, config) {
   s.audio?.stop();
   s.audio = createAudio({
     onError: (m) => toast(m, true),
-    onStateChange: () => {
+    onStateChange: (state) => {
+      // Quando o AudioContext entra em running, força reset do proximo
+      // para que o áudio retome imediatamente após unlock
+      if (state === 'running') {
+        s.audio?._resetClock?.();
+      }
       atualizarAudioUnlock(slot);
     },
     volume: volumeEfetivo(s.userId),
@@ -1397,34 +1492,66 @@ function startAudio(slot, config) {
     s.audio = null;
     return;
   }
+  // Se já foi suspenso na criação, tenta resumir imediatamente
+  if (s.audio.isSuspended()) {
+    s.audio.resume().then(() => atualizarAudioUnlock(slot)).catch(() => {});
+  }
   atualizarAudioUnlock(slot);
   renderBar();
 }
 
 function atualizarAudioUnlock(slot) {
   const s = streams.get(slot);
-  const tile = document.querySelector(`.tile[data-slot="${slot}"]`);
-  if (!tile) return;
 
-  const existingBtn = tile.querySelector('.tile-audio-unlock');
-  if (s?.audio?.isSuspended()) {
-    if (!existingBtn) {
-      const btn = document.createElement('button');
-      btn.className = 'tile-audio-unlock';
-      btn.setAttribute('aria-label', 'Ativar áudio');
-      btn.textContent = '🔊 Toque para ativar o áudio';
-      btn.addEventListener('click', async (e) => {
-        e.stopPropagation();
-        if (typeof window !== 'undefined') window.__IOS_UNLOCK_ATTEMPTED = true;
-        const res = await s.audio?.resume();
-        if (typeof window !== 'undefined') window.__IOS_UNLOCK_RESULT = res ? 'SUCCESS' : 'FAILED';
-        atualizarAudioUnlock(slot);
-      });
+  // Também atualiza o overlay global (aparece quando não há tile ainda)
+  const overlayId = `audio-unlock-global-${slot}`;
+  let globalOverlay = document.getElementById(overlayId);
+
+  const tile = document.querySelector(`.tile[data-slot="${slot}"]`);
+
+  const audioSuspenso = s?.audio?.isSuspended();
+
+  // Remove botão do tile se não está mais suspenso
+  if (tile) {
+    const existingBtn = tile.querySelector('.tile-audio-unlock');
+    if (!audioSuspenso && existingBtn) {
+      existingBtn.remove();
+    } else if (audioSuspenso && !existingBtn) {
+      const btn = criarBotaoUnlock(slot, s);
       tile.append(btn);
     }
-  } else if (existingBtn) {
-    existingBtn.remove();
   }
+
+  // Overlay global (fora do tile, para quando o tile ainda não existe no DOM)
+  if (audioSuspenso && !tile) {
+    if (!globalOverlay) {
+      globalOverlay = document.createElement('div');
+      globalOverlay.id = overlayId;
+      globalOverlay.className = 'audio-unlock-overlay';
+      const btn = criarBotaoUnlock(slot, s);
+      globalOverlay.append(btn);
+      document.getElementById('app')?.append(globalOverlay);
+    }
+  } else if (globalOverlay) {
+    globalOverlay.remove();
+  }
+}
+
+function criarBotaoUnlock(slot, s) {
+  const btn = document.createElement('button');
+  btn.className = 'tile-audio-unlock';
+  btn.setAttribute('aria-label', 'Ativar áudio');
+  btn.innerHTML = '<span style="font-size:1.2em">🔊</span> Toque para ativar o áudio';
+  btn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    if (typeof window !== 'undefined') window.__IOS_UNLOCK_ATTEMPTED = true;
+    btn.disabled = true;
+    btn.textContent = 'Ativando…';
+    const res = await s?.audio?.resume();
+    if (typeof window !== 'undefined') window.__IOS_UNLOCK_RESULT = res ? 'SUCCESS' : 'FAILED';
+    atualizarAudioUnlock(slot);
+  });
+  return btn;
 }
 
 function tentarDesbloquearAudioGlobal() {
@@ -1444,7 +1571,17 @@ function tentarDesbloquearAudioGlobal() {
   }
 }
 window.addEventListener('pointerdown', tentarDesbloquearAudioGlobal, { passive: true });
+window.addEventListener('touchstart', tentarDesbloquearAudioGlobal, { passive: true });
 window.addEventListener('touchend', tentarDesbloquearAudioGlobal, { passive: true });
+window.addEventListener('click', tentarDesbloquearAudioGlobal, { passive: true });
+window.addEventListener('keydown', tentarDesbloquearAudioGlobal, { passive: true });
+// Também tenta em visibilitychange: o tab voltou para o foco
+window.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    setTimeout(() => tentarDesbloquearAudioGlobal(), 100);
+    setTimeout(() => tentarDesbloquearAudioGlobal(), 500);
+  }
+});
 
 function startStream(slot, config) {
   const s = streams.get(slot);
@@ -1463,8 +1600,15 @@ function closeStream(slot) {
   if (!s) return;
   clearTimeout(s.videoWatchdog);
   s.videoWatchdog = null;
-  s.player.stop();
+  s.pip?.dispose();
+  s.player.destroy();
   s.audio?.stop();
+  if (s.pipStream) {
+    for (const track of s.pipStream.getTracks()) {
+      try { track.stop(); } catch {}
+    }
+    s.pipStream = null;
+  }
   const tile = document.querySelector(`.tile[data-slot="${slot}"]`);
   tile?.querySelector('.tile-audio-unlock')?.remove();
   fecharPeer(s);
@@ -1473,6 +1617,104 @@ function closeStream(slot) {
   streams.delete(slot);
   // Quem estava no palco saiu: renderGrid escolhe a próxima na próxima passada.
   if (activeSlot === slot) activeSlot = null;
+}
+
+// -------------------------------------------------- Background Keepalive & PiP
+
+function initBackgroundAudioKeepalive() {
+  if (bgAudio) return;
+  try {
+    const silentWavBase64 =
+      'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQQAAAAAAA==';
+    bgAudio = document.createElement('audio');
+    bgAudio.src = silentWavBase64;
+    bgAudio.loop = true;
+    bgAudio.preload = 'auto';
+    bgAudio.volume = 0.01;
+    bgAudio.setAttribute('playsinline', '');
+    bgAudio.setAttribute('webkit-playsinline', '');
+    document.body.append(bgAudio);
+  } catch (err) {
+    console.warn('[bgAudio] Erro ao criar elemento de keepalive:', err);
+  }
+}
+
+function enableBackgroundPlayback() {
+  initBackgroundAudioKeepalive();
+  if (bgAudio && bgAudio.paused) {
+    bgAudio.play().catch(() => {});
+  }
+  if ('mediaSession' in navigator) {
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: roomInfo?.name ? `Sala: ${roomInfo.name}` : 'Transmissão ao Vivo',
+        artist: 'DiscordScreen',
+        album: 'Ao Vivo',
+      });
+      navigator.mediaSession.playbackState = 'playing';
+      navigator.mediaSession.setActionHandler('play', () => {
+        if (bgAudio) bgAudio.play().catch(() => {});
+        for (const s of streams.values()) s.audio?.resume();
+      });
+      navigator.mediaSession.setActionHandler('pause', () => {});
+    } catch (e) {
+      console.warn('[mediaSession] Erro ao registrar MediaSession:', e);
+    }
+  }
+  atualizarWakeLock();
+}
+
+function disableBackgroundPlaybackIfEmpty() {
+  if (watching.size === 0 && !myBroadcast) {
+    if (bgAudio && !bgAudio.paused) {
+      bgAudio.pause();
+    }
+    if ('mediaSession' in navigator) {
+      try {
+        navigator.mediaSession.playbackState = 'none';
+      } catch {}
+    }
+    releaseWakeLock();
+  }
+}
+
+async function atualizarWakeLock() {
+  if (watching.size > 0 || myBroadcast) {
+    if ('wakeLock' in navigator && !wakeLock) {
+      try {
+        wakeLock = await navigator.wakeLock.request('screen');
+        wakeLock.addEventListener('release', () => {
+          wakeLock = null;
+        });
+      } catch {}
+    }
+  } else {
+    releaseWakeLock();
+  }
+}
+
+function releaseWakeLock() {
+  if (wakeLock) {
+    try {
+      wakeLock.release().catch(() => {});
+    } catch {}
+    wakeLock = null;
+  }
+}
+
+function warmupPictureInPicture(slot) {
+  const target = slot ?? activeSlot ?? streams.keys().next().value;
+  streams.get(target)?.pip?.warmup();
+}
+
+function togglePictureInPicture(slot) {
+  const target = slot ?? activeSlot ?? streams.keys().next().value;
+  const stream = streams.get(target);
+  if (!stream) {
+    toast('Nenhuma transmissão ativa para janela flutuante.');
+    return;
+  }
+  return stream.pip.toggle();
 }
 
 function endStream(slot) {
@@ -1543,9 +1785,10 @@ async function receberOferta(slot, sdp) {
     enviarRtc(slot, { kind: 'answer', sdp: pc.localDescription });
 
     // O sinal de que deu certo é quadro na tela, não estado de conexão: um peer
-    // "connected" que não entrega nada é indistinguível de um travamento, e é
-    // exatamente o que este caminho existe para evitar.
+    // "connected" que não entrega nada é indistinguível de um travamento.
     s.video.addEventListener('loadeddata', () => assumirRtc(slot), { once: true });
+    s.video.addEventListener('timeupdate', () => assumirRtc(slot), { once: true });
+    s.video.addEventListener('playing', () => assumirRtc(slot), { once: true });
 
     clearTimeout(s.prazoRtc);
     s.prazoRtc = setTimeout(() => {
@@ -1576,16 +1819,34 @@ function assumirRtc(slot) {
   s.viaRtc = true;
   clearTimeout(s.prazoRtc);
   s.prazoRtc = null;
-
-  // O som passa a sair do <video>; manter o decodificador de áudio tocando
-  // junto daria eco com meio segundo de diferença entre os dois caminhos.
-  s.audio?.stop();
-  s.audio = null;
-  s.video.muted = false;
-  // Tirar do mudo pode fazer a política de autoplay pausar o vídeo; pedir o
-  // play de volta é barato e é o que evita a tela congelar no primeiro quadro.
-  s.video.play().catch(() => {});
+  clearTimeout(s.videoWatchdog);
+  s.videoWatchdog = null;
   s.started = true;
+  s.videoState = 'PLAYING';
+
+  const tile = document.querySelector(`.tile[data-slot="${slot}"]`);
+  if (tile) {
+    const loading = tile.querySelector('.tile-loading');
+    if (loading) loading.remove();
+    const c = tile.querySelector('canvas');
+    if (c) c.style.display = 'none';
+    const v = tile.querySelector('video');
+    if (v) v.style.display = 'block';
+  }
+
+  // Se a conexão direta carregar faixa de áudio, desliga o decodificador de áudio
+  // para evitar eco; se vier sem áudio, mantém o s.audio ativo tocando pelo relay.
+  const temAudioRtc = (s.video.srcObject?.getAudioTracks?.().length ?? 0) > 0;
+  if (temAudioRtc) {
+    s.audio?.stop();
+    s.audio = null;
+    const vol = volumeEfetivo(s.userId);
+    s.video.muted = (volume === 0 || vol === 0);
+    s.video.volume = Math.min(1, Math.max(0, vol));
+    s.video.play().catch(() => {});
+  } else {
+    s.video.muted = true;
+  }
 
   aplicarVolume(slot);
   ws?.send(JSON.stringify({ type: 'rtc-ativo', slot, on: true }));
@@ -1613,6 +1874,10 @@ function desistirDoRtc(slot) {
     s.started = false;
     const config = available.get(slot)?.config;
     if (config) s.player.start(config);
+    const audioConfig = available.get(slot)?.audioConfig;
+    if (audioConfig && !s.audio) {
+      startAudio(slot, audioConfig);
+    }
     renderGrid();
     renderBar();
   }
@@ -1935,6 +2200,8 @@ function limparSala() {
   closeAllStreams();
   available.clear();
   watching.clear();
+  rememberedWatchingSlots.clear();
+  disableBackgroundPlaybackIfEmpty();
   participants = [];
   lastRoomState = null;
   activeSlot = null;
@@ -1945,6 +2212,8 @@ function limparSala() {
   roomInfo = null;
   setRoomUrl(null);
 
+  clearTimeout(reconnectTimer);
+  reconnectTimer = null;
   ws?.close();
   ws = null;
 }
@@ -1964,6 +2233,7 @@ async function showLobby() {
   // O dock inteiro sai de cena: todo controle dele é de dentro da sala, e o
   // cabeçalho do lobby já traz perfil e criar sala.
   $('fullscreen').hidden = true;
+  if ($('pipBtn')) $('pipBtn').hidden = true;
   $('panel').hidden = true;
 
   // O login só aparece para convidado: quem já entrou pelo Discord não tem o
@@ -2457,11 +2727,22 @@ function connect() {
       for (const slot of [...available.keys()]) if (!live.has(slot)) available.delete(slot);
       for (const slot of [...streams.keys()]) if (!live.has(slot)) closeStream(slot);
       for (const slot of [...watching]) if (!live.has(slot)) watching.delete(slot);
+      for (const slot of [...rememberedWatchingSlots]) if (!live.has(slot)) rememberedWatchingSlots.delete(slot);
+
+      // Auto-retoma transmissões que o espectador estava assistindo antes da reconexão
+      if (rememberedWatchingSlots.size > 0) {
+        for (const s of msg.streams ?? []) {
+          if (rememberedWatchingSlots.has(s.slot) && !watching.has(s.slot)) {
+            watchSlot(s.slot);
+          }
+        }
+      }
+
       renderGrid();
       renderBar();
     } else if (msg.type === 'stream-start') {
       // Só anuncia; ninguém assiste até pedir.
-      available.set(msg.slot, { userId: msg.userId, fonte: msg.fonte ?? 'tela', config: null });
+      available.set(msg.slot, { userId: msg.userId, fonte: msg.fonte ?? 'tela', config: null, audioConfig: null });
       watching.delete(msg.slot);
       closeStream(msg.slot);
       renderGrid();
@@ -2475,16 +2756,24 @@ function connect() {
         // s.audio), e o audio-config so e enviado uma vez por transmissao: o
         // som nunca voltava. startStream ja reconfigura o decoder de video
         // sozinho, entao o lugar so precisa existir na primeira vez.
-        if (!streams.has(msg.slot)) openStream(msg.slot, info?.userId ?? msg.slot);
+        if (!streams.has(msg.slot)) {
+          openStream(msg.slot, info?.userId ?? msg.slot);
+          if (info?.audioConfig) startAudio(msg.slot, info.audioConfig);
+        }
         startStream(msg.slot, msg.config);
       }
     } else if (msg.type === 'audio-config') {
-      // Pode chegar antes de eu pedir para assistir; aí não há o que ligar, e
-      // o servidor reenvia assim que o pedido chegar.
-      if (watching.has(msg.slot)) startAudio(msg.slot, msg.config);
+      const info = available.get(msg.slot);
+      if (info) info.audioConfig = msg.config;
+      if (watching.has(msg.slot)) {
+        if (!streams.has(msg.slot)) openStream(msg.slot, info?.userId ?? msg.slot);
+        startAudio(msg.slot, msg.config);
+      }
     } else if (msg.type === 'stream-stop') {
       available.delete(msg.slot);
       watching.delete(msg.slot);
+      rememberedWatchingSlots.delete(msg.slot);
+      disableBackgroundPlaybackIfEmpty();
       endStream(msg.slot);
     } else if (msg.type === 'room-gone') {
       roomTokens = null;
@@ -2505,6 +2794,14 @@ function connect() {
   ws.addEventListener('close', () => {
     clearInterval(wsPingTimer);
     wsPingTimer = null;
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+
+    // Preserva slots assistidos para auto-recuperar ao reconectar
+    for (const slot of watching) {
+      rememberedWatchingSlots.add(slot);
+    }
+
     closeAllStreams();
     available.clear();
     watching.clear();
@@ -2530,7 +2827,10 @@ function connect() {
 
     setEmpty('Reconectando…', 'A conexão com a sala caiu.');
     // Backoff — evita martelar o servidor se ele estiver fora do ar.
-    setTimeout(connect, reconnectDelay);
+    reconnectTimer = setTimeout(() => {
+      reconnectTimer = null;
+      connect();
+    }, reconnectDelay);
     reconnectDelay = Math.min(reconnectDelay * 2, 15_000);
   });
 
@@ -2806,6 +3106,7 @@ $('watchSite').addEventListener('click', abrirNoSite);
 
 function stopMyBroadcast(fonte = null) {
   if (!fonte || fonte === 'tela') {
+    releaseBroadcastWakeLock();
     myBroadcast?.stop();
     myBroadcast = null;
   }
@@ -2862,8 +3163,54 @@ function setVolume(valor) {
   renderVolume();
 }
 
-$('mute').addEventListener('click', () => setVolume(volume === 0 ? volumeAntes : 0));
+$('mute').addEventListener('click', (e) => {
+  // Em telas sensíveis ao toque (mobile), o clique também alterna a abertura do controle deslizante
+  const isMobile = window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+  if (isMobile) {
+    const box = $('volumeBox');
+    if (!box.classList.contains('open')) {
+      box.classList.add('open');
+      return;
+    }
+  }
+  setVolume(volume === 0 ? volumeAntes : 0);
+});
 $('volume').addEventListener('input', (e) => setVolume(Number(e.target.value) / 100));
+
+// Fecha o slider de volume ao tocar fora em mobile
+window.addEventListener('click', (e) => {
+  if (!$('volumeBox')?.contains(e.target)) {
+    $('volumeBox')?.classList.remove('open');
+  }
+});
+
+let broadcastWakeLock = null;
+
+async function acquireBroadcastWakeLock() {
+  try {
+    if ('wakeLock' in navigator && !broadcastWakeLock) {
+      broadcastWakeLock = await navigator.wakeLock.request('screen');
+      broadcastWakeLock.addEventListener('release', () => {
+        broadcastWakeLock = null;
+      });
+    }
+  } catch (err) {
+    console.warn('[wakeLock]', err?.message);
+  }
+}
+
+function releaseBroadcastWakeLock() {
+  if (broadcastWakeLock) {
+    broadcastWakeLock.release().catch(() => {});
+    broadcastWakeLock = null;
+  }
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible' && myBroadcast) {
+    acquireBroadcastWakeLock();
+  }
+});
 
 async function broadcastFromHere(quality = null) {
   if (!navigator.mediaDevices?.getDisplayMedia || !window.VideoEncoder) return false;
@@ -2887,6 +3234,7 @@ async function broadcastFromHere(quality = null) {
     audio: true,
     onAviso: (m) => toast(m, true),
     onEnd: () => {
+      releaseBroadcastWakeLock();
       myBroadcast = null;
       renderBar();
     },
@@ -2896,9 +3244,12 @@ async function broadcastFromHere(quality = null) {
   try {
     await b.start();
     myBroadcast = b;
+    await acquireBroadcastWakeLock();
+    enableBackgroundPlayback();
     renderBar();
     return true;
   } catch (err) {
+    releaseBroadcastWakeLock();
     const showedPicker = performance.now() - startedAt > 250;
     if (err.name === 'NotAllowedError' && showedPicker) return true;
     return false;
@@ -3071,6 +3422,43 @@ document.addEventListener('fullscreenchange', () => {
   if (!document.fullscreenElement && telaCheia) {
     telaCheia = false;
     renderGrid();
+  }
+});
+
+// Janela Flutuante (Picture-in-Picture)
+$('pipBtn')?.addEventListener('click', () => {
+  togglePictureInPicture(activeSlot);
+});
+$('pipBtn')?.addEventListener('pointerdown', () => warmupPictureInPicture(activeSlot));
+$('pipBtn')?.addEventListener('focus', () => warmupPictureInPicture(activeSlot));
+
+document.addEventListener('leavepictureinpicture', () => {
+  $('pipBtn')?.classList.remove('on');
+});
+
+document.addEventListener('enterpictureinpicture', () => {
+  $('pipBtn')?.classList.add('on');
+});
+
+// Tratamento de background / minimização para celular e PC
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    // Se a conexão com a sala caiu em segundo plano, reconecta imediatamente sem esperar timer
+    if (inRoom() && (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING)) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+      reconnectDelay = 1000;
+      connect();
+    } else if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: 'ping', timestamp: Date.now() }));
+      // Desperta decodificadores e pede keyframes imediatos
+      for (const [slot, s] of streams.entries()) {
+        s.audio?.resume();
+        s.player?.requestKeyframe?.();
+        ws.send(JSON.stringify({ type: 'need-keyframe', slot }));
+      }
+    }
+    atualizarWakeLock();
   }
 });
 
